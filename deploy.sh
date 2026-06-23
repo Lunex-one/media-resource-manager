@@ -3,6 +3,7 @@
 # Media Resource Manager CDK Deployment Script
 
 set -e
+set -o pipefail
 
 # Parse command line arguments
 AUTO_APPROVE=false
@@ -58,7 +59,7 @@ fi
 
 # Check CDK CLI version compatibility with aws-cdk-lib
 CDK_LIB_VERSION=$(node -p "require('./package.json').dependencies['aws-cdk-lib'] || ''" 2>/dev/null | sed 's/[\^~]//')
-CDK_CLI_VERSION=$(cdk --version 2>/dev/null | awk '{print $1}')
+CDK_CLI_VERSION=$(npx cdk --version 2>/dev/null | awk '{print $1}')
 if [[ -n "$CDK_LIB_VERSION" && -n "$CDK_CLI_VERSION" ]]; then
     CDK_LIB_MAJOR_MINOR=$(echo "$CDK_LIB_VERSION" | cut -d. -f1-2)
     CDK_CLI_MAJOR_MINOR=$(echo "$CDK_CLI_VERSION" | cut -d. -f1-2)
@@ -245,7 +246,7 @@ print_success "Frontend built successfully"
 
 # Show what will change before deploying
 print_status "🔍 Checking for changes..."
-if ! cdk diff --all 2>/dev/null; then
+if ! npx cdk diff --all 2>/dev/null; then
     print_warning "Could not generate diff (normal on first deploy with imported VPC)"
 fi
 
@@ -278,7 +279,7 @@ elif aws cloudformation describe-stacks --stack-name CDKToolkit --region "$CURRE
     print_success "CDK environment already bootstrapped (legacy bootstrap detected)"
 else
     print_warning "CDK environment not bootstrapped. Bootstrapping now..."
-    if ! cdk bootstrap; then
+    if ! npx cdk bootstrap; then
         print_error "CDK bootstrap failed!"
         exit 1
     fi
@@ -293,7 +294,7 @@ if [ "$CURRENT_REGION" != "us-east-1" ]; then
         print_success "CDK environment bootstrapped in us-east-1 (legacy)"
     else
         print_warning "Bootstrapping CDK in us-east-1 (required for WAF CloudFront stack)..."
-        if ! cdk bootstrap aws://${CDK_DEFAULT_ACCOUNT:-$(aws sts get-caller-identity --query Account --output text)}/us-east-1; then
+        if ! npx cdk bootstrap aws://${CDK_DEFAULT_ACCOUNT:-$(aws sts get-caller-identity --query Account --output text)}/us-east-1; then
             print_warning "CDK bootstrap in us-east-1 failed — WAF stack may not deploy"
         else
             print_success "CDK bootstrap in us-east-1 completed"
@@ -304,7 +305,7 @@ fi
 # Deploy all stacks
 print_status "🏗️  Deploying all infrastructure stacks..."
 CDK_OUTPUT=$(mktemp)
-if cdk deploy --all --require-approval never 2>&1 | tee "$CDK_OUTPUT"; then
+if npx cdk deploy --all --require-approval never 2>&1 | tee "$CDK_OUTPUT"; then
     print_success "All stacks deployed successfully"
 else
     print_error "Failed to deploy stacks"

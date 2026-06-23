@@ -72,6 +72,28 @@ function generateTargetGroupName(acronym, purpose) {
   return sanitizeResourceName(name, 32, '-tg');
 }
 
+/**
+ * Build an IAM resource name with region suffix, falling back to acronym if the
+ * full name would exceed the 64-character IAM limit.
+ * 
+ * Pattern: <prefix>-Regional-<purpose>-<suffix>-<regionCode>
+ * Example: TegnaFleetCommand-Regional-SessionManager-Role-apsoutheast1
+ * Fallback: TFC-Regional-SessionManager-Role-apsoutheast1
+ * 
+ * @param {string} productName - Full product name (e.g., 'TegnaFleetCommand')
+ * @param {string} acronym - Short acronym (e.g., 'TFC')
+ * @param {string} purpose - Role/profile purpose (e.g., 'SessionManager', 'ConnectionGateway')
+ * @param {string} suffix - Resource type suffix (e.g., 'Role', 'Profile')
+ * @param {string} regionCode - Region with dashes removed (e.g., 'apsoutheast1')
+ * @returns {string} - IAM-safe name within 64 characters
+ */
+function buildIamName(productName, acronym, purpose, suffix, regionCode) {
+  const full = `${productName}-Regional-${purpose}-${suffix}-${regionCode}`;
+  if (full.length <= 64) return full;
+  // Fall back to acronym prefix to stay within IAM's 64-char limit
+  return `${acronym}-Regional-${purpose}-${suffix}-${regionCode}`;
+}
+
 // Cache account ID to avoid repeated STS calls
 let cachedAccountId = null;
 async function getAccountId() {
@@ -320,6 +342,9 @@ function generateCloudFormationTemplate(config) {
   
   // Lowercase acronym for S3 bucket names (S3 doesn't allow uppercase)
   const acronymLower = acronym.toLowerCase();
+  
+  // Region code without dashes for IAM resource name suffixes (e.g., 'apsoutheast1')
+  const regionCode = region.replace(/-/g, '');
   
   // Determine TLS secret name - if dcvDomainName is provided, use the primary region's TLS cert secret
   // The wildcard cert in primary region covers all regional hub domain names
@@ -645,7 +670,7 @@ function generateCloudFormationTemplate(config) {
       SessionManagerRole: {
         Type: 'AWS::IAM::Role',
         Properties: {
-          RoleName: { 'Fn::Sub': '${ProductName}-Regional-SessionManager-Role' },
+          RoleName: buildIamName(productName, acronym, 'SessionManager', 'Role', regionCode),
           AssumeRolePolicyDocument: {
             Version: '2012-10-17',
             Statement: [{ Effect: 'Allow', Principal: { Service: 'ec2.amazonaws.com' }, Action: 'sts:AssumeRole' }]
@@ -700,7 +725,7 @@ function generateCloudFormationTemplate(config) {
       SessionManagerInstanceProfile: {
         Type: 'AWS::IAM::InstanceProfile',
         Properties: {
-          InstanceProfileName: { 'Fn::Sub': '${ProductName}-Regional-SessionManager-Profile' },
+          InstanceProfileName: buildIamName(productName, acronym, 'SessionManager', 'Profile', regionCode),
           Roles: [{ Ref: 'SessionManagerRole' }]
         }
       },
@@ -708,7 +733,7 @@ function generateCloudFormationTemplate(config) {
       ConnectionGatewayRole: {
         Type: 'AWS::IAM::Role',
         Properties: {
-          RoleName: { 'Fn::Sub': '${ProductName}-Regional-ConnectionGateway-Role' },
+          RoleName: buildIamName(productName, acronym, 'ConnectionGateway', 'Role', regionCode),
           AssumeRolePolicyDocument: {
             Version: '2012-10-17',
             Statement: [{ Effect: 'Allow', Principal: { Service: 'ec2.amazonaws.com' }, Action: 'sts:AssumeRole' }]
@@ -744,7 +769,7 @@ function generateCloudFormationTemplate(config) {
       ConnectionGatewayInstanceProfile: {
         Type: 'AWS::IAM::InstanceProfile',
         Properties: {
-          InstanceProfileName: { 'Fn::Sub': '${ProductName}-Regional-ConnectionGateway-Profile' },
+          InstanceProfileName: buildIamName(productName, acronym, 'ConnectionGateway', 'Profile', regionCode),
           Roles: [{ Ref: 'ConnectionGatewayRole' }]
         }
       },
@@ -752,7 +777,7 @@ function generateCloudFormationTemplate(config) {
       WorkstationRole: {
         Type: 'AWS::IAM::Role',
         Properties: {
-          RoleName: { 'Fn::Sub': '${ProductName}-Regional-Workstation-Role' },
+          RoleName: buildIamName(productName, acronym, 'Workstation', 'Role', regionCode),
           AssumeRolePolicyDocument: {
             Version: '2012-10-17',
             Statement: [{ Effect: 'Allow', Principal: { Service: 'ec2.amazonaws.com' }, Action: 'sts:AssumeRole' }]
@@ -812,7 +837,7 @@ function generateCloudFormationTemplate(config) {
       WorkstationInstanceProfile: {
         Type: 'AWS::IAM::InstanceProfile',
         Properties: {
-          InstanceProfileName: { 'Fn::Sub': '${ProductName}-Regional-Workstation-Profile' },
+          InstanceProfileName: buildIamName(productName, acronym, 'Workstation', 'Profile', regionCode),
           Roles: [{ Ref: 'WorkstationRole' }]
         }
       },
@@ -822,7 +847,7 @@ function generateCloudFormationTemplate(config) {
         TlsCertReplicatorRole: {
           Type: 'AWS::IAM::Role',
           Properties: {
-            RoleName: { 'Fn::Sub': '${ProductName}-Regional-TlsCertReplicator-Role' },
+            RoleName: buildIamName(productName, acronym, 'TlsCertReplicator', 'Role', regionCode),
             AssumeRolePolicyDocument: {
               Version: '2012-10-17',
               Statement: [{
@@ -889,7 +914,7 @@ function generateCloudFormationTemplate(config) {
       EmptyBucketRole: {
         Type: 'AWS::IAM::Role',
         Properties: {
-          RoleName: { 'Fn::Sub': '${ProductName}-Regional-EmptyBucket-Role' },
+          RoleName: buildIamName(productName, acronym, 'EmptyBucket', 'Role', regionCode),
           AssumeRolePolicyDocument: {
             Version: '2012-10-17',
             Statement: [{
@@ -1360,7 +1385,7 @@ function generateCloudFormationTemplate(config) {
       CleanupLambdaRole: {
         Type: 'AWS::IAM::Role',
         Properties: {
-          RoleName: { 'Fn::Sub': '${ProductName}-Regional-Cleanup-Role' },
+          RoleName: buildIamName(productName, acronym, 'Cleanup', 'Role', regionCode),
           AssumeRolePolicyDocument: {
             Version: '2012-10-17',
             Statement: [{ Effect: 'Allow', Principal: { Service: 'lambda.amazonaws.com' }, Action: 'sts:AssumeRole' }]
@@ -1551,7 +1576,7 @@ function generateCloudFormationTemplate(config) {
       Ec2StateHandlerRole: {
         Type: 'AWS::IAM::Role',
         Properties: {
-          RoleName: { 'Fn::Sub': '${ProductName}-Regional-EC2StateHandler-Role' },
+          RoleName: buildIamName(productName, acronym, 'EC2StateHandler', 'Role', regionCode),
           AssumeRolePolicyDocument: {
             Version: '2012-10-17',
             Statement: [{ Effect: 'Allow', Principal: { Service: 'lambda.amazonaws.com' }, Action: 'sts:AssumeRole' }]
@@ -1647,7 +1672,7 @@ function generateCloudFormationTemplate(config) {
       DcvStatusSyncRole: {
         Type: 'AWS::IAM::Role',
         Properties: {
-          RoleName: { 'Fn::Sub': '${ProductName}-Regional-DcvStatusSync-Role' },
+          RoleName: buildIamName(productName, acronym, 'DcvStatusSync', 'Role', regionCode),
           AssumeRolePolicyDocument: {
             Version: '2012-10-17',
             Statement: [{ Effect: 'Allow', Principal: { Service: 'lambda.amazonaws.com' }, Action: 'sts:AssumeRole' }]
@@ -1758,7 +1783,7 @@ function generateCloudFormationTemplate(config) {
       ManualCleanupRole: {
         Type: 'AWS::IAM::Role',
         Properties: {
-          RoleName: { 'Fn::Sub': '${ProductName}-Regional-ManualCleanup-Role' },
+          RoleName: buildIamName(productName, acronym, 'ManualCleanup', 'Role', regionCode),
           AssumeRolePolicyDocument: {
             Version: '2012-10-17',
             Statement: [{ Effect: 'Allow', Principal: { Service: 'lambda.amazonaws.com' }, Action: 'sts:AssumeRole' }]
@@ -1919,7 +1944,7 @@ function generateCloudFormationTemplate(config) {
 
       // ==================== DCV LAMBDAS (S3-based code for VPC access to Session Manager) ====================
       // These Lambdas need to run in the regional hub VPC to access the DCV Session Manager API
-      ...generateDcvLambdaResources(acronymLower, privateSubnetRefs, lambdaAssets, enableWindows, enableLinux, enableMacOS),
+      ...generateDcvLambdaResources(acronymLower, privateSubnetRefs, lambdaAssets, enableWindows, enableLinux, enableMacOS, productName, acronym, regionCode),
 
       // ==================== MACOS DEDICATED HOST RESOURCES ====================
       // Only created when enableMacOS is true
@@ -2089,7 +2114,7 @@ function generateCloudFormationTemplate(config) {
       // Workstation instance profile name (needed for macOS which doesn't use launch template)
       WorkstationInstanceProfileName: {
         Description: 'Name of the Workstation Instance Profile',
-        Value: { 'Fn::Sub': '${ProductName}-Regional-Workstation-Profile' }
+        Value: buildIamName(productName, acronym, 'Workstation', 'Profile', regionCode)
       },
       // DCV Lambda outputs (for cross-region invocation from primary region state machines)
       ...(lambdaAssets.dcvSessionManager && lambdaAssets.dcvSessionManager.bucket ? {
@@ -3093,7 +3118,7 @@ function getSubnetRefs(type, azCount) {
 }
 
 // Generate DCV Lambda resources (S3-based code for VPC access to Session Manager API)
-function generateDcvLambdaResources(acronymLower, privateSubnetRefs, lambdaAssets, enableWindows, enableLinux, enableMacOS) {
+function generateDcvLambdaResources(acronymLower, privateSubnetRefs, lambdaAssets, enableWindows, enableLinux, enableMacOS, productName, acronym, regionCode) {
   const resources = {};
 
   // DCV Lambda Security Group (allows outbound to Session Manager NLB)
@@ -3130,7 +3155,7 @@ function generateDcvLambdaResources(acronymLower, privateSubnetRefs, lambdaAsset
   resources.DcvLambdaRole = {
     Type: 'AWS::IAM::Role',
     Properties: {
-      RoleName: { 'Fn::Sub': '${ProductName}-Regional-DCV-Lambda-Role' },
+      RoleName: buildIamName(productName, acronym, 'DCV-Lambda', 'Role', regionCode),
       AssumeRolePolicyDocument: {
         Version: '2012-10-17',
         Statement: [{ Effect: 'Allow', Principal: { Service: 'lambda.amazonaws.com' }, Action: 'sts:AssumeRole' }]
@@ -3374,7 +3399,7 @@ function generateDcvLambdaResources(acronymLower, privateSubnetRefs, lambdaAsset
     resources.OntapCifsLambdaRole = {
       Type: 'AWS::IAM::Role',
       Properties: {
-        RoleName: { 'Fn::Sub': '${ProductName}-Regional-ONTAP-CIFS-Lambda-Role' },
+        RoleName: buildIamName(productName, acronym, 'ONTAP-CIFS-Lambda', 'Role', regionCode),
         AssumeRolePolicyDocument: {
           Version: '2012-10-17',
           Statement: [{
