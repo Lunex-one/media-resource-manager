@@ -299,8 +299,10 @@ exports.handler = async (event) => {
         hostResourceGroupArn = regionalConfig.hostResourceGroupArn;
         subnetMappingsRaw = regionalConfig.subnetMappings || [];
         securityGroupId = regionalConfig.securityGroupId;
-        // Instance profile name follows pattern: ${PascalCaseName}-Regional-Workstation-Profile
-        instanceProfileName = regionalConfig.instanceProfileName || `${pascalCaseName}-Regional-Workstation-Profile`;
+        // Instance profile name follows pattern: ${PascalCaseName}-Regional-Workstation-Profile-${regionCode}
+        // The profile name now includes a region code suffix to avoid cross-region IAM collisions
+        const regionCode = targetRegion.replace(/-/g, '');
+        instanceProfileName = regionalConfig.instanceProfileName || `${pascalCaseName}-Regional-Workstation-Profile-${regionCode}`;
         effectiveAmiId = regionalConfig.regionalAmiId || amiId;
         console.log(`Using regional config for ${targetRegion}: hostResourceGroup=${hostResourceGroupArn}, instanceProfile=${instanceProfileName}, ami=${effectiveAmiId}`);
     } else {

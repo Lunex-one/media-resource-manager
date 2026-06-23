@@ -1,0 +1,12 @@
+# Enforce LF line endings for files that will execute on Linux,
+# regardless of the developer's OS or git config.
+# See: https://git-scm.com/docs/gitattributes
+
+# Shell scripts
+*.sh text eol=lf
+
+# Dockerfiles
+Dockerfile text eol=lf
+
+# Python scripts (Lambda functions run on Linux)
+*.py text eol=lf
