@@ -24,10 +24,16 @@ export default defineConfig({
     chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
-        manualChunks: {
-          'aws-sdk': ['@aws-sdk/client-cognito-identity-provider', '@aws-sdk/client-ssm'],
-          'cloudscape': ['@cloudscape-design/components', '@cloudscape-design/global-styles'],
-          'react-vendor': ['react', 'react-dom', 'react-router-dom']
+        manualChunks(id) {
+          if (id.includes('@aws-sdk/client-cognito-identity-provider') || id.includes('@aws-sdk/client-ssm')) {
+            return 'aws-sdk';
+          }
+          if (id.includes('@cloudscape-design/components') || id.includes('@cloudscape-design/global-styles')) {
+            return 'cloudscape';
+          }
+          if (id.includes('react') || id.includes('react-dom') || id.includes('react-router-dom')) {
+            return 'react-vendor';
+          }
         }
       }
     }
