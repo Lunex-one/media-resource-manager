@@ -153,11 +153,17 @@ Edit `parameters.json` with your environment settings:
 
 Then deploy:
 
+**Linux / macOS / WSL:**
 ```bash
 ./deploy.sh
 ```
 
-The script handles everything: dependencies, CDK bootstrap, build, and deployment of all stacks. Takes approximately 90 minutes on first deploy. Use `./deploy.sh -y` to skip the confirmation prompt.
+**Windows (PowerShell):**
+```powershell
+.\deploy.ps1
+```
+
+Both scripts handle everything: dependencies, CDK bootstrap, build, and deployment of all stacks. Takes approximately 90 minutes on first deploy. Use `-y` flag to skip the confirmation prompt.
 
 See [Configuration](#configuration) for all available parameters.
 
@@ -185,7 +191,7 @@ Choose the deployment method that fits your environment:
 | Method | Best For | Prerequisites |
 |--------|----------|---------------|
 | [CloudFormation + CodeBuild](#quick-start) | **Recommended.** One-click, no local tools | AWS Console access |
-| [Local Deployment](#local-deployment) | Development, full control | Node.js 22+, AWS CLI, Docker |
+| [Local Deployment](#local-deployment) | Development, full control | Node.js 20+, AWS CLI |
 | [CloudShell Deployment](#cloudshell-deployment) | Quick setup, no local tools | AWS Console access |
 | [CodeBuild Deployment](#codebuild-deployment) | CI/CD, team deployments | AWS account |
 
@@ -193,7 +199,9 @@ Choose the deployment method that fits your environment:
 
 **Prerequisites:**
 - AWS CLI configured with appropriate permissions
-- Node.js 22+ and npm
+- Node.js 20+ and npm (LTS recommended)
+- **Windows**: PowerShell 5.1+ (built-in). Run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` if needed.
+- **Linux/macOS**: bash
 - AWS CDK CLI (`npm install -g aws-cdk`)
 - Docker (for Lambda function bundling)
 
