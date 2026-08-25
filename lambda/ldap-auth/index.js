@@ -64,12 +64,12 @@ async function authenticateWithLDAP(username, password) {
             console.log('Starting LDAP authentication for:', username);
             
             const client = ldap.createClient({
-              url: `ldap://\${domainName}:389`,
+              url: `ldap://${domainName}:389`,
               timeout: 10000,
               connectTimeout: 10000,
             });
             
-            const userDN = `${username}@${domainName}`;
+            const userDN = username.includes(`@`) ? username : `${username}@${domainName}`;
             
             client.bind(userDN, password, (err) => {
               if (err) {

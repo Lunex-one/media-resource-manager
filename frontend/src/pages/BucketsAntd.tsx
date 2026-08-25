@@ -51,6 +51,13 @@ import { Upload as S3Upload } from '@aws-sdk/lib-storage';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { fromCognitoIdentityPool } from '@aws-sdk/credential-providers';
 import AppLayoutAntd from '../components/AppLayoutAntd';
+import {
+  browseS3Objects,
+  getS3DownloadUrl,
+  getS3UploadUrl,
+  deleteS3Object,
+  createS3Folder,
+} from '../utils/storageApi';
 
 const { Text, Paragraph } = Typography;
 
@@ -105,11 +112,28 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
   const [hasMore, setHasMore] = useState(false);
   const [totalLoaded, setTotalLoaded] = useState(0);
 
-  // Initialize S3 client with Cognito Identity Pool credentials
+  // When useCognitoAuth is false (e.g. LDAP auth mode), Cognito Identity Pool federation can't
+  // validate our custom-signed JWT, so all S3 operations go through backend API endpoints instead
+  // (using the Lambda's own IAM role) rather than direct browser-to-S3 calls.
+  const useBackendApi = !config?.useCognitoAuth;
+  const isReady = useBackendApi ? !!config?.mediaBucketName : !!s3Client;
+
+  // Initialize S3 client with Cognito Identity Pool credentials (Cognito auth mode only)
   useEffect(() => {
     const initializeS3Client = async () => {
-      if (!config?.identityPoolId || !config?.mediaBucketName) {
-        setConfigError('Storage Browser requires Identity Pool and Media Bucket configuration. Please ensure the CDK stack has been deployed with these resources.');
+      if (!config?.mediaBucketName) {
+        setConfigError('Storage Browser requires Media Bucket configuration. Please ensure the CDK stack has been deployed with these resources.');
+        return;
+      }
+
+      if (useBackendApi) {
+        // LDAP auth mode: no direct S3 client needed, all operations go through the backend API
+        setConfigError(null);
+        return;
+      }
+
+      if (!config?.identityPoolId) {
+        setConfigError('Storage Browser requires Identity Pool configuration. Please ensure the CDK stack has been deployed with these resources.');
         return;
       }
 
@@ -145,55 +169,86 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
     };
 
     initializeS3Client();
-  }, [config]);
+  }, [config, useBackendApi]);
 
-  // Load objects when client is ready or prefix changes
+  // Load objects when client/API is ready or prefix changes
   const loadObjects = useCallback(async (loadMore = false) => {
-    if (!s3Client || !config?.mediaBucketName) return;
+    if (!config?.mediaBucketName) return;
+    if (!useBackendApi && !s3Client) return;
 
     setLoading(true);
     try {
-      const command = new ListObjectsV2Command({
-        Bucket: config.mediaBucketName,
-        Prefix: currentPrefix,
-        Delimiter: '/',
-        MaxKeys: 100, // Load 100 items at a time
-        ContinuationToken: loadMore ? continuationToken : undefined,
-      });
-
-      const response = await s3Client.send(command);
       const items: S3Object[] = [];
+      let nextToken: string | undefined;
 
-      // Add folders (common prefixes)
-      if (response.CommonPrefixes) {
-        for (const prefix of response.CommonPrefixes) {
-          if (prefix.Prefix) {
-            const folderName = prefix.Prefix.slice(currentPrefix.length, -1);
+      if (useBackendApi) {
+        const result = await browseS3Objects(config.mediaBucketName, currentPrefix);
+
+        for (const folder of result.folders) {
+          const folderName = folder.key.slice(currentPrefix.length, -1);
+          items.push({
+            key: folder.key,
+            name: folderName,
+            isFolder: true,
+          });
+        }
+
+        for (const file of result.files) {
+          const fileName = file.key.slice(currentPrefix.length);
+          if (fileName) {
             items.push({
-              key: prefix.Prefix,
-              name: folderName,
-              isFolder: true,
+              key: file.key,
+              name: fileName,
+              size: file.size,
+              lastModified: file.lastModified ? new Date(file.lastModified) : undefined,
+              isFolder: false,
             });
           }
         }
-      }
+      } else {
+        const command = new ListObjectsV2Command({
+          Bucket: config.mediaBucketName,
+          Prefix: currentPrefix,
+          Delimiter: '/',
+          MaxKeys: 100, // Load 100 items at a time
+          ContinuationToken: loadMore ? continuationToken : undefined,
+        });
 
-      // Add files
-      if (response.Contents) {
-        for (const obj of response.Contents) {
-          if (obj.Key && obj.Key !== currentPrefix) {
-            const fileName = obj.Key.slice(currentPrefix.length);
-            if (fileName) {
+        const response = await s3Client!.send(command);
+
+        // Add folders (common prefixes)
+        if (response.CommonPrefixes) {
+          for (const prefix of response.CommonPrefixes) {
+            if (prefix.Prefix) {
+              const folderName = prefix.Prefix.slice(currentPrefix.length, -1);
               items.push({
-                key: obj.Key,
-                name: fileName,
-                size: obj.Size,
-                lastModified: obj.LastModified,
-                isFolder: false,
+                key: prefix.Prefix,
+                name: folderName,
+                isFolder: true,
               });
             }
           }
         }
+
+        // Add files
+        if (response.Contents) {
+          for (const obj of response.Contents) {
+            if (obj.Key && obj.Key !== currentPrefix) {
+              const fileName = obj.Key.slice(currentPrefix.length);
+              if (fileName) {
+                items.push({
+                  key: obj.Key,
+                  name: fileName,
+                  size: obj.Size,
+                  lastModified: obj.LastModified,
+                  isFolder: false,
+                });
+              }
+            }
+          }
+        }
+
+        nextToken = response.NextContinuationToken;
       }
 
       // Update state
@@ -204,16 +259,16 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
         setObjects(items);
         setTotalLoaded(items.length);
       }
-      
-      setContinuationToken(response.NextContinuationToken);
-      setHasMore(!!response.NextContinuationToken);
+
+      setContinuationToken(nextToken);
+      setHasMore(!!nextToken);
     } catch (error) {
       console.error('Failed to list objects:', error);
       messageApi.error('Failed to load bucket contents');
     } finally {
       setLoading(false);
     }
-  }, [s3Client, config?.mediaBucketName, currentPrefix, continuationToken, messageApi]);
+  }, [s3Client, config?.mediaBucketName, currentPrefix, continuationToken, messageApi, useBackendApi]);
 
   // Reset pagination when prefix changes
   useEffect(() => {
@@ -223,10 +278,10 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
   }, [currentPrefix]);
 
   useEffect(() => {
-    if (s3Client) {
+    if (isReady) {
       loadObjects(false);
     }
-  }, [s3Client, currentPrefix]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isReady, currentPrefix]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const navigateToFolder = (prefix: string) => {
     setCurrentPrefix(prefix);
@@ -240,16 +295,21 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
   };
 
   const downloadFile = async (key: string, fileName: string) => {
-    if (!s3Client || !config?.mediaBucketName) return;
+    if (!config?.mediaBucketName) return;
+    if (!useBackendApi && !s3Client) return;
 
     try {
-      const command = new GetObjectCommand({
-        Bucket: config.mediaBucketName,
-        Key: key,
-      });
+      let url: string;
+      if (useBackendApi) {
+        url = await getS3DownloadUrl(config.mediaBucketName, key);
+      } else {
+        const command = new GetObjectCommand({
+          Bucket: config.mediaBucketName,
+          Key: key,
+        });
+        url = await getSignedUrl(s3Client!, command, { expiresIn: 3600 });
+      }
 
-      const url = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
-      
       // Create a temporary link and click it
       const link = document.createElement('a');
       link.href = url;
@@ -257,7 +317,7 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      
+
       messageApi.success(`Downloading ${fileName}`);
     } catch (error) {
       console.error('Failed to download file:', error);
@@ -266,7 +326,8 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
   };
 
   const deleteObject = async (key: string, isFolder: boolean) => {
-    if (!s3Client || !config?.mediaBucketName) return;
+    if (!config?.mediaBucketName) return;
+    if (!useBackendApi && !s3Client) return;
 
     Modal.confirm({
       title: `Delete ${isFolder ? 'folder' : 'file'}?`,
@@ -275,7 +336,11 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
       okType: 'danger',
       onOk: async () => {
         try {
-          if (isFolder) {
+          if (useBackendApi) {
+            // Backend handles recursive delete for folders (keys ending in '/') server-side
+            await deleteS3Object(config.mediaBucketName, key);
+            messageApi.success(isFolder ? 'Folder deleted' : 'Deleted successfully');
+          } else if (isFolder) {
             // For folders, we need to delete all objects with this prefix
             let continuationToken: string | undefined;
             let deletedCount = 0;
@@ -287,7 +352,7 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
                 Prefix: key,
                 ContinuationToken: continuationToken,
               });
-              const listResponse = await s3Client.send(listCommand);
+              const listResponse = await s3Client!.send(listCommand);
 
               if (listResponse.Contents && listResponse.Contents.length > 0) {
                 // Delete objects in batches (max 1000 per request)
@@ -300,7 +365,7 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
                     Bucket: config.mediaBucketName,
                     Delete: { Objects: objectsToDelete },
                   });
-                  await s3Client.send(deleteCommand);
+                  await s3Client!.send(deleteCommand);
                   deletedCount += objectsToDelete.length;
                 }
               }
@@ -315,7 +380,7 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
               Bucket: config.mediaBucketName,
               Key: key,
             });
-            await s3Client.send(command);
+            await s3Client!.send(command);
             messageApi.success('Deleted successfully');
           }
           loadObjects(false);
@@ -328,16 +393,21 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
   };
 
   const createFolder = async () => {
-    if (!s3Client || !config?.mediaBucketName || !newFolderName.trim()) return;
+    if (!config?.mediaBucketName || !newFolderName.trim()) return;
+    if (!useBackendApi && !s3Client) return;
 
     try {
       const folderKey = `${currentPrefix}${newFolderName.trim()}/`;
-      const command = new PutObjectCommand({
-        Bucket: config.mediaBucketName,
-        Key: folderKey,
-        Body: '',
-      });
-      await s3Client.send(command);
+      if (useBackendApi) {
+        await createS3Folder(config.mediaBucketName, folderKey);
+      } else {
+        const command = new PutObjectCommand({
+          Bucket: config.mediaBucketName,
+          Key: folderKey,
+          Body: '',
+        });
+        await s3Client!.send(command);
+      }
       messageApi.success('Folder created');
       setNewFolderModalVisible(false);
       setNewFolderName('');
@@ -354,11 +424,46 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
     relativePath: string,
     uploadId: string
   ): Promise<void> => {
-    if (!s3Client || !config?.mediaBucketName) {
-      throw new Error('S3 client not initialized');
+    if (!config?.mediaBucketName) {
+      throw new Error('Storage not configured');
     }
 
     const key = `${currentPrefix}${relativePath}`;
+
+    if (useBackendApi) {
+      // Single-shot presigned PUT upload (supports files up to 5GB per S3 limits).
+      // Note: unlike the Cognito-mode multipart upload below, this is not chunked, so very
+      // large files (multi-GB) may be less resilient to network interruptions.
+      const uploadUrl = await getS3UploadUrl(config.mediaBucketName, key, file.type || 'application/octet-stream');
+
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('PUT', uploadUrl);
+        xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            const percent = Math.round((event.loaded / event.total) * 100);
+            setUploadQueue(prev => prev.map(item =>
+              item.id === uploadId ? { ...item, progress: percent } : item
+            ));
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve();
+          } else {
+            reject(new Error(`Upload failed with status ${xhr.status}`));
+          }
+        };
+        xhr.onerror = () => reject(new Error('Upload failed'));
+        xhr.send(file);
+      });
+      return;
+    }
+
+    if (!s3Client) {
+      throw new Error('S3 client not initialized');
+    }
 
     const upload = new S3Upload({
       client: s3Client,
@@ -374,7 +479,7 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
     upload.on('httpUploadProgress', (progress) => {
       if (progress.loaded && progress.total) {
         const percent = Math.round((progress.loaded / progress.total) * 100);
-        setUploadQueue(prev => prev.map(item => 
+        setUploadQueue(prev => prev.map(item =>
           item.id === uploadId ? { ...item, progress: percent } : item
         ));
       }
@@ -385,7 +490,8 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
 
   // Process upload queue
   const processUploadQueue = useCallback(async (files: { file: File; path: string }[]) => {
-    if (!s3Client || !config?.mediaBucketName || files.length === 0) return;
+    if (!config?.mediaBucketName || files.length === 0) return;
+    if (!useBackendApi && !s3Client) return;
 
     // Filter out files that are already being uploaded (deduplicate)
     const newFiles = files.filter(f => {
@@ -448,7 +554,7 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
     setTimeout(() => {
       setUploadQueue(prev => prev.filter(item => item.status !== 'success'));
     }, 3000);
-  }, [s3Client, config?.mediaBucketName, currentPrefix, loadObjects]);
+  }, [s3Client, config?.mediaBucketName, currentPrefix, loadObjects, useBackendApi]);
 
   // Recursively read directory entries
   const readDirectoryEntries = async (entry: FileSystemDirectoryEntry, basePath: string = ''): Promise<{ file: File; path: string }[]> => {
@@ -494,7 +600,11 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
     e.stopPropagation();
     setIsDragging(false);
 
-    if (!s3Client || !config?.mediaBucketName) {
+    if (!config?.mediaBucketName) {
+      messageApi.error('Storage not configured');
+      return;
+    }
+    if (!useBackendApi && !s3Client) {
       messageApi.error('S3 client not initialized');
       return;
     }
@@ -530,7 +640,7 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
       messageApi.info(`Uploading ${filesToUpload.length} file(s)...`);
       processUploadQueue(filesToUpload);
     }
-  }, [s3Client, config?.mediaBucketName, messageApi, processUploadQueue]);
+  }, [s3Client, config?.mediaBucketName, messageApi, processUploadQueue, useBackendApi]);
 
   const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();

@@ -50,3 +50,80 @@ export const getStorageConfig = async (): Promise<StorageConfig> => {
   }
   return await response.json();
 };
+
+// Non-Cognito-Identity-Pool fallback for browsing/managing bucket contents (e.g. LDAP auth mode).
+// These call the backend Lambda's own IAM role instead of federated browser credentials.
+
+export interface S3BrowseItem {
+  key: string;
+  size?: number;
+  lastModified?: string;
+  isFolder: boolean;
+}
+
+export interface S3BrowseResult {
+  bucket: string;
+  prefix: string;
+  folders: S3BrowseItem[];
+  files: S3BrowseItem[];
+}
+
+export const browseS3Objects = async (bucket: string, prefix: string): Promise<S3BrowseResult> => {
+  const response = await apiCall(
+    `storage/s3-buckets?bucket=${encodeURIComponent(bucket)}&prefix=${encodeURIComponent(prefix)}`,
+    { headers: getAuthHeaders() }
+  );
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to list bucket contents');
+  }
+  return await response.json();
+};
+
+export const getS3DownloadUrl = async (bucket: string, key: string): Promise<string> => {
+  const response = await apiCall(
+    `storage/s3-buckets?bucket=${encodeURIComponent(bucket)}&action=download&key=${encodeURIComponent(key)}`,
+    { headers: getAuthHeaders() }
+  );
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to get download URL');
+  }
+  const data = await response.json();
+  return data.downloadUrl;
+};
+
+export const getS3UploadUrl = async (bucket: string, key: string, contentType: string): Promise<string> => {
+  const response = await apiCall(
+    `storage/s3-buckets?bucket=${encodeURIComponent(bucket)}&action=uploadUrl&key=${encodeURIComponent(key)}&contentType=${encodeURIComponent(contentType)}`,
+    { headers: getAuthHeaders() }
+  );
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to get upload URL');
+  }
+  const data = await response.json();
+  return data.uploadUrl;
+};
+
+export const deleteS3Object = async (bucket: string, key: string): Promise<void> => {
+  const response = await apiCall(
+    `storage/s3-buckets?bucket=${encodeURIComponent(bucket)}&action=delete&key=${encodeURIComponent(key)}`,
+    { headers: getAuthHeaders() }
+  );
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to delete object');
+  }
+};
+
+export const createS3Folder = async (bucket: string, key: string): Promise<void> => {
+  const response = await apiCall(
+    `storage/s3-buckets?bucket=${encodeURIComponent(bucket)}&action=createFolder&key=${encodeURIComponent(key)}`,
+    { headers: getAuthHeaders() }
+  );
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to create folder');
+  }
+};

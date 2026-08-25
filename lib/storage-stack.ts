@@ -559,6 +559,20 @@ export class StorageStack extends cdk.Stack {
       actions: ['s3:ListAllMyBuckets', 's3:GetBucketLocation'],
       resources: ['*'],
     }));
+
+    // Allow browsing/managing bucket contents via backend API (non-Cognito-Identity-Pool
+    // fallback, e.g. for LDAP auth mode where Cognito Identity Pool federation isn't available)
+    this.functions.listS3Buckets.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['s3:ListBucket'],
+      resources: ['arn:aws:s3:::*'],
+    }));
+
+    this.functions.listS3Buckets.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+      resources: ['arn:aws:s3:::*/*'],
+    }));
     const stateMachineDefinition = {
       Comment: "FSx Storage Creation State Machine with Native Service Integrations",
       StartAt: "UpdateStatusToValidating",

@@ -3,17 +3,18 @@
 
 const { SSMClient, SendCommandCommand, GetParametersByPathCommand } = require('@aws-sdk/client-ssm');
 
-const ssm = new SSMClient();
 
 exports.handler = async (event) => {
     console.log('Joining workstation to domain:', JSON.stringify(event, null, 2));
 
-    const { instanceId } = event;
+    const { instanceId, region } = event;
+    const ssm = new SSMClient({ region });
+    const ssmHome = new SSMClient();
     const pascalCaseName = process.env.PASCAL_CASE_NAME;
 
     try {
         // Get Active Directory parameters
-        const adParamsResponse = await ssm.send(new GetParametersByPathCommand({
+        const adParamsResponse = await ssmHome.send(new GetParametersByPathCommand({
             Path: `/${pascalCaseName}/Identity`,
             Recursive: true
         }));
