@@ -4,7 +4,7 @@
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, PutCommand, GetCommand } = require('@aws-sdk/lib-dynamodb');
 const { SFNClient, StartExecutionCommand } = require('@aws-sdk/client-sfn');
-const { S3Client, HeadBucketCommand } = require('@aws-sdk/client-s3');
+const { S3Client, HeadBucketCommand, GetBucketLocationCommand } = require('@aws-sdk/client-s3');
 const crypto = require('crypto');
 
 const dynamoClient = new DynamoDBClient({ region: process.env.AWS_REGION });
@@ -124,7 +124,7 @@ exports.handler = async (event) => {
 
     // Handle different storage types
     if (storageType === 'mountpoint-s3') {
-      return await createMountpointS3Storage(storageId, data, configuration, createdAt);
+      return await createMountpointS3Storage(storageId, data, configuration, createdAt, targetRegion);
     } else if (storageType === 'fsx-windows') {
       return await createFsxWindowsStorage(storageId, data, configuration, createdAt, targetRegion);
     } else if (storageType === 'fsx-ontap') {
@@ -158,7 +158,7 @@ exports.handler = async (event) => {
  * This is a lightweight storage type - just saves config to DynamoDB
  * No CloudFormation or state machine needed
  */
-async function createMountpointS3Storage(storageId, data, configuration, createdAt) {
+async function createMountpointS3Storage(storageId, data, configuration, createdAt, targetRegion) {
   // Validate S3-specific fields
   if (!configuration.bucketName) {
     return {
@@ -173,7 +173,7 @@ async function createMountpointS3Storage(storageId, data, configuration, created
 
   // Validate bucket exists and is accessible
   try {
-    await s3.send(new HeadBucketCommand({ Bucket: configuration.bucketName }));
+    await new S3Client({ region: targetRegion || process.env.AWS_REGION }).send(new HeadBucketCommand({ Bucket: configuration.bucketName }));
     console.log(`Bucket ${configuration.bucketName} exists and is accessible`);
   } catch (error) {
     console.error('Bucket validation failed for', configuration.bucketName + ':', error);
@@ -187,9 +187,14 @@ async function createMountpointS3Storage(storageId, data, configuration, created
     };
   }
 
-  // Normalize mount path
+  // Normalize mount path - a bare drive letter (e.g. "Y" or "Y:") is a Windows
+  // mount target and must NOT get a leading slash, since this same storage
+  // config can be attached to Windows workstations via rclone.
   let mountPath = configuration.mountPath || '/mnt/s3';
-  if (!mountPath.startsWith('/')) {
+  const driveLetterMatch = mountPath.trim().match(/^([A-Za-z]):?$/);
+  if (driveLetterMatch) {
+    mountPath = `${driveLetterMatch[1].toUpperCase()}:`;
+  } else if (!mountPath.startsWith('/')) {
     mountPath = '/' + mountPath;
   }
 
@@ -201,9 +206,16 @@ async function createMountpointS3Storage(storageId, data, configuration, created
   const uid = configuration.uid || '1000';
   const gid = configuration.gid || '1000';
 
-  // S3 buckets are global, but we store the region where this storage config was created
-  // This helps with filtering in the UI (S3 mounts work from any region)
-  const region = process.env.AWS_REGION;
+  // Resolve the bucket's actual region (rather than just recording the region this
+  // Lambda happens to run in) so the UI and any per-region tooling (e.g. Windows rclone
+  // mounts) show/use the bucket's real location.
+  let region = process.env.AWS_REGION;
+  try {
+    const loc = await s3.send(new GetBucketLocationCommand({ Bucket: configuration.bucketName }));
+    region = loc.LocationConstraint || 'us-east-1';
+  } catch (error) {
+    console.error(`Failed to resolve bucket region for ${configuration.bucketName}, falling back to Lambda's home region:`, error);
+  }
 
   const item = {
     storageId,

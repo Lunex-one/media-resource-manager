@@ -1020,7 +1020,7 @@ const WorkstationManagementAntd: React.FC<WorkstationManagementAntdProps> = ({
         const compatibleStorage = availableStorageList.filter((storage: any) => {
           let platformCompatible = true;
           if (storage.type === 'mountpoint-s3') {
-            platformCompatible = selectedPlatforms.has('linux');
+            platformCompatible = selectedPlatforms.has('linux') || selectedPlatforms.has('windows');
           } else if (storage.type === 'fsx-windows') {
             platformCompatible = selectedPlatforms.has('windows');
           } else if (storage.type === 'fsx-ontap') {
@@ -1201,8 +1201,8 @@ const WorkstationManagementAntd: React.FC<WorkstationManagementAntdProps> = ({
             const wasEnabled = existingConfig[assignment.storageId]?.autoMount || false;
             const isEnabled = assignment.autoMount;
 
-            // Handle S3 mounts (Linux only)
-            if (storageDetails?.type === 'mountpoint-s3' && platform === 'linux') {
+            // Handle S3 mounts (Linux and Windows)
+            if (storageDetails?.type === 'mountpoint-s3' && (platform === 'linux' || platform === 'windows')) {
               if (isEnabled && !wasEnabled) {
                 try {
                   await apiCall('storage/mount', {
