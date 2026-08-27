@@ -284,7 +284,7 @@ export class MacOSWorkstationCreationStack extends cdk.Stack {
       resources: [
         macOSWorkstationRole.roleArn,
         // Allow passing regional workstation roles for satellite region deployments
-        `arn:aws:iam::${this.account}:role/${props.pascalCaseName}-Regional-Workstation-Role`,
+        `arn:aws:iam::${this.account}:role/${props.pascalCaseName}-Regional-Workstation-Role-*`,
       ],
     }));
     props.workstationTable.grantReadWriteData(createInstanceFunction);

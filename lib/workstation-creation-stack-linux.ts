@@ -203,7 +203,7 @@ export class LinuxWorkstationCreationStack extends cdk.Stack {
       resources: [
         props.workstationLaunchTemplate.role!.roleArn,
         // Allow passing regional workstation roles for satellite region deployments
-        `arn:aws:iam::${this.account}:role/${props.pascalCaseName}-Regional-Workstation-Role`,
+        `arn:aws:iam::${this.account}:role/${props.pascalCaseName}-Regional-Workstation-Role-*`,
       ],
     }));
     props.workstationTable.grantReadWriteData(createInstanceFunction);

@@ -414,7 +414,17 @@ const WorkstationDetailsAntd: React.FC<WorkstationDetailsAntdProps> = ({
     {
       title: 'Drive Letter',
       key: 'driveLetter',
-      render: (_, record) => (record.config?.driveLetter ? `${record.config.driveLetter}:` : '-'),
+      render: (_, record) => {
+        if (record.config?.driveLetter) return `${record.config.driveLetter}:`;
+        // mountpoint-s3 on Windows stores a drive-letter-style mountPath (e.g. "Y:")
+        // instead of a separate driveLetter field - fall back to parsing it out.
+        const mountPath = record.config?.mountPath;
+        if (mountPath) {
+          const match = String(mountPath).match(/^\/?([A-Za-z]):?$/);
+          if (match) return `${match[1].toUpperCase()}:`;
+        }
+        return '-';
+      },
     },
     {
       title: 'Auto Mount',
