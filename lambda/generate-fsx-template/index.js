@@ -626,7 +626,9 @@ exports.handler = async (event) => {
     // workstations instead). Network config is resolved to literal values here
     // since this is Avid's unmodified template, not a JS-object template we
     // control where {{resolve:ssm:...}} could be embedded directly.
-    const networkConfig = await getPrimaryNetworkConfigForNexis(productName);
+    const networkConfig = regionalNetworkConfig
+      ? { vpcId: regionalNetworkConfig.vpcId, subnetId: regionalNetworkConfig.privateSubnet1Id }
+      : await getPrimaryNetworkConfigForNexis(productName);
     const systemName = sanitizeNexisSystemName(name);
     const adminPassword = generateOntapPassword();
 

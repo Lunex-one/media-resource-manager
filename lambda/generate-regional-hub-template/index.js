@@ -774,6 +774,12 @@ function generateCloudFormationTemplate(config) {
         }
       },
       
+      StorageApplianceKeyPair: {
+        Type: 'AWS::EC2::KeyPair',
+        Properties: {
+          KeyName: `${acronym.toLowerCase()}-storage-appliance-key`
+        }
+      },
       WorkstationRole: {
         Type: 'AWS::IAM::Role',
         Properties: {

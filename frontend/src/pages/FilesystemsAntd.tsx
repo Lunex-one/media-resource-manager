@@ -372,6 +372,7 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
       case 'fsx-windows': return 'FSx for Windows';
       case 'fsx-ontap': return 'FSx for ONTAP';
       case 'mountpoint-s3': return 'Mountpoint for S3';
+      case 'nexis': return 'Avid NEXIS';
       default: return type;
     }
   };
@@ -381,6 +382,7 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
       case 'fsx-windows': return 'blue';
       case 'fsx-ontap': return 'purple';
       case 'mountpoint-s3': return 'green';
+      case 'nexis': return 'orange';
       default: return 'default';
     }
   };
@@ -598,6 +600,7 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
               { label: 'FSx for Windows', value: 'fsx-windows' },
               { label: 'FSx for ONTAP', value: 'fsx-ontap' },
               { label: 'Mountpoint for S3', value: 'mountpoint-s3' },
+              { label: 'Avid NEXIS', value: 'nexis' },
             ]}
           />
           <Select
@@ -662,7 +665,7 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
           }}
           width={600}
         >
-          <Form form={createForm} layout="vertical" initialValues={{ type: 'fsx-ontap', configuration: { teamSize: 'medium', storageCapacity: 2048, volumeSize: 1600, backupRetention: 30, haPairs: 2, ssdStorageCapacity: 256, throughputCapacity: 64, automaticBackupRetentionPeriod: 7 } }}>
+          <Form form={createForm} layout="vertical" initialValues={{ type: 'fsx-ontap', configuration: { teamSize: 'medium', storageCapacity: 2048, volumeSize: 1600, backupRetention: 30, haPairs: 2, ssdStorageCapacity: 256, throughputCapacity: 64, automaticBackupRetentionPeriod: 7, instanceType: 'c5.2xlarge' } }}>
             <Form.Item name="name" label="Name" rules={[{ required: true, message: 'Name is required' }]}>
               <Input ref={createNameInputRef} placeholder="Enter storage name" />
             </Form.Item>
@@ -672,6 +675,7 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
                   { label: 'FSx for NetApp ONTAP', value: 'fsx-ontap' },
                   { label: 'FSx for Windows File System', value: 'fsx-windows' },
                   { label: 'Mountpoint for Amazon S3', value: 'mountpoint-s3' },
+                  { label: 'Avid NEXIS', value: 'nexis' },
                 ]}
               />
             </Form.Item>
@@ -763,6 +767,26 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
                 </Form.Item>
                 <Form.Item name={['configuration', 'automaticBackupRetentionPeriod']} label="Backup Retention (days)">
                   <InputNumber min={0} max={90} style={{ width: '100%' }} />
+                </Form.Item>
+              </>
+            )}
+
+            {/* Avid NEXIS fields */}
+            {storageType === 'nexis' && (
+              <>
+                <Alert
+                  type="info"
+                  message="Avid NEXIS System Director"
+                  description="Deploys the Avid NEXIS System Director only. Editors will need the Avid NEXIS client installed on their workstation and manually pointed at this System Director's address in their 'remote hosts' configuration - automatic client installation and mounting isn't available in MRM yet."
+                  style={{ marginBottom: 16 }}
+                />
+                <Form.Item name={['configuration', 'instanceType']} label="System Director Instance Type">
+                  <Select options={[
+                    { label: 'c5.2xlarge', value: 'c5.2xlarge' },
+                    { label: 'c5.4xlarge', value: 'c5.4xlarge' },
+                    { label: 'c6i.2xlarge', value: 'c6i.2xlarge' },
+                    { label: 'c6i.4xlarge', value: 'c6i.4xlarge' },
+                  ]} />
                 </Form.Item>
               </>
             )}

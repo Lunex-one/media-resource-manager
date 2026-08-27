@@ -45,14 +45,6 @@ async function validateRegion(region, storageType) {
     };
   }
 
-  // Avid NEXIS System Director is currently primary-region only
-  if (storageType === 'nexis') {
-    return {
-      valid: false,
-      error: 'Avid NEXIS is currently only supported in the primary region'
-    };
-  }
-  
   // For other storage types, check if regional hub exists and is available
   if (!REGIONAL_HUBS_TABLE) {
     return { 
@@ -138,7 +130,7 @@ exports.handler = async (event) => {
     } else if (storageType === 'fsx-ontap') {
       return await createFsxOntapStorage(storageId, data, configuration, createdAt, targetRegion);
     } else if (storageType === 'nexis') {
-      return await createNexisStorage(storageId, data, configuration, createdAt);
+      return await createNexisStorage(storageId, data, configuration, createdAt, targetRegion);
     } else {
       return {
         statusCode: 400,
@@ -483,7 +475,8 @@ async function createFsxOntapStorage(storageId, data, configuration, createdAt, 
  * the same Step Functions state machine FSx uses (generate template -> create/poll
  * CFN stack -> parse outputs -> mark available).
  */
-async function createNexisStorage(storageId, data, configuration, createdAt) {
+async function createNexisStorage(storageId, data, configuration, createdAt, targetRegion) {
+  const region = targetRegion || PRIMARY_REGION;
   const allowedInstanceTypes = ['c5.2xlarge', 'c5.4xlarge', 'c6i.2xlarge', 'c6i.4xlarge'];
   const instanceType = configuration.instanceType || 'c5.2xlarge';
   if (!allowedInstanceTypes.includes(instanceType)) {
@@ -505,7 +498,7 @@ async function createNexisStorage(storageId, data, configuration, createdAt) {
     description: data.description || '',
     status: 'initializing',
     platform: 'multi', // NEXIS client is installable on Windows, Linux, and macOS
-    region: PRIMARY_REGION,
+    region,
     instanceType,
     configuration
   };
@@ -528,7 +521,7 @@ async function createNexisStorage(storageId, data, configuration, createdAt) {
       storageId,
       name: data.name,
       type: 'nexis',
-      region: PRIMARY_REGION,
+      region,
       configuration: { ...configuration, instanceType }
     }),
     name: executionName
@@ -547,7 +540,7 @@ async function createNexisStorage(storageId, data, configuration, createdAt) {
         type: 'nexis',
         status: 'initializing',
         platform: 'multi',
-        region: PRIMARY_REGION,
+        region,
         instanceType,
         configuration,
         createdAt
