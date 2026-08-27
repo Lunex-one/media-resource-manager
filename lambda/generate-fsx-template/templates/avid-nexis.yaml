@@ -1,0 +1,191 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: This template creates an Avid NEXIS | Cloud Nearline Storage (AWS S3) system with one System Director Version 26.6.0-557-c61e27fd5
+Metadata:
+  Anchors:
+    BuildPrefix: /AvidNEXIS_26.6/Release/557
+    S3Bucket: !Join ['', [!Ref S3Bucket, '-', !Ref 'AWS::Region']]
+    S3BucketEndpoint: !Join ['', ['https://', !Join ['', [!Ref S3Bucket, '-', !Ref 'AWS::Region']], .s3., !Ref 'AWS::Region', .amazonaws.com]]
+    HTTPSLocation: !Join ['', [!Join ['', ['https://', !Join ['', [!Ref S3Bucket, '-', !Ref 'AWS::Region']], .s3., !Ref 'AWS::Region', .amazonaws.com]], /AvidNEXIS_26.6/Release/557]]
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Infrastructure options
+        Parameters:
+          - VPC
+          - SubnetId
+          - KeyName
+          - InstanceTypeSD
+          - Tags
+          - EnableCloudWatchLogs
+          - CloudWatchLogsRetention
+          - BoundaryPolicy
+      - Label:
+          default: Avid NEXIS | Cloud Nearline Storage (AWS S3) Options
+        Parameters:
+          - SystemName
+          - AdminPassword
+          - ConfirmPassword
+      - Label:
+          default: Internal options
+        Parameters:
+          - S3Bucket
+    ParameterLabels:
+      SubnetId:
+        default: Subnet Id from VPC
+      VPC:
+        default: VPC Id
+      SystemName:
+        default: System Name
+      KeyName:
+        default: Key Name
+      InstanceTypeSD:
+        default: Instance Type for System Director
+      S3Bucket:
+        default: S3 Bucket
+      AdminPassword:
+        default: Admin Password
+      ConfirmPassword:
+        default: Confirm Password
+      Tags:
+        default: Additional tags
+      EnableCloudWatchLogs:
+        default: Enable CloudWatch Logs
+      CloudWatchLogsRetention:
+        default: CloudWatch Logs Retention
+      BoundaryPolicy:
+        default: Boundary policy ARN - optional
+Parameters:
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Select Subnet for deployment. This Subnet will be used for deployment of Avid NEXIS | Cloud Nearline Storage (AWS S3) and all components
+    AllowedPattern: .+
+    ConstraintDescription: must be the name of an existing Subnet connected to the VPC.
+  VPC:
+    Type: AWS::EC2::VPC::Id
+    Description: Select VPC for deployment. The VPC will be used for deployment of Avid NEXIS | Cloud Nearline Storage (AWS S3) and all components
+    AllowedPattern: .+
+    ConstraintDescription: must be the name of an existing VPC.
+  SystemName:
+    Type: String
+    Description: Specify Avid NEXIS | Cloud Nearline Storage (AWS S3) system name
+    MinLength: 3
+    MaxLength: 21
+    AllowedPattern: ^[0-9a-z][0-9a-z-]+[0-9a-z]$
+    ConstraintDescription: Type a name for the new Avid NEXIS | Cloud Nearline Storage (AWS S3) system. The name can be 3 to 21 English alphanumeric characters, and optionally contain a dash/hyphen character (-). The name must start with a letter or number and cannot end with a dash.
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair to enable SSH access to instances.
+    AllowedPattern: .+
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+  InstanceTypeSD:
+    Description: Select System Director instance type
+    Type: String
+    Default: c5.2xlarge
+    AllowedValues: [c5.2xlarge, c5.4xlarge, c6i.2xlarge, c6i.4xlarge]
+    ConstraintDescription: must be a valid EC2 instance type.
+  S3Bucket:
+    Type: String
+    Description: Enter a name for the S3 bucket
+    Default: avid-deployments
+  AdminPassword:
+    Description: Type a password for the Avid NEXIS | Cloud Nearline Storage (AWS S3) system. The password can be 8 to 32 symbols, and is not displayed as you type it, for security
+    Type: String
+    MaxLength: 32
+    MinLength: 8
+    NoEcho: true
+  ConfirmPassword:
+    Description: Confirm password for the Avid NEXIS | Cloud Nearline Storage (AWS S3) system. The password can be 8 to 32 symbols, and is not displayed as you type it, for security
+    Type: String
+    MaxLength: 32
+    MinLength: 8
+    NoEcho: true
+  Tags:
+    Description: Users tags
+    Type: String
+  EnableCloudWatchLogs:
+    Type: String
+    Description: Enable or disable CloudWatch Logs
+    AllowedValues: [true, false]
+    Default: false
+  CloudWatchLogsRetention:
+    Type: Number
+    Description: Retention in days for CloudWatch logs
+    Default: 14
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 2192, 2557, 2922, 3288, 3653]
+  BoundaryPolicy:
+    Type: String
+    Description: All IAM roles created by this stack will have this boundary policy set.
+Rules:
+  SubnetsInVPC:
+    Assertions:
+      - Assert:
+          Fn::EachMemberIn:
+            - Fn::ValueOfAll:
+                - AWS::EC2::Subnet::Id
+                - VpcId
+            - Fn::RefAll: AWS::EC2::VPC::Id
+        AssertDescription: All subnets must be in the VPC
+Conditions:
+  PasswordsMatch: !Equals [!Ref AdminPassword, !Ref ConfirmPassword]
+Resources:
+  MessagesLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /AvidNexis/${AWS::StackName}
+      RetentionInDays: !Ref CloudWatchLogsRetention
+  SG:
+    Condition: PasswordsMatch
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Join ['', [!Join ['', [!Join ['', ['https://', !Join ['', [!Ref S3Bucket, '-', !Ref 'AWS::Region']], .s3., !Ref 'AWS::Region', .amazonaws.com]], /AvidNEXIS_26.6/Release/557]], /cloudformation/sg-s3.yaml]]
+      TimeoutInMinutes: 20
+      Parameters:
+        Prefix: !Sub ${SystemName}-${AWS::StackName}
+        VPC: !Ref VPC
+  PolicySD:
+    Condition: PasswordsMatch
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Join ['', [!Join ['', [!Join ['', ['https://', !Join ['', [!Ref S3Bucket, '-', !Ref 'AWS::Region']], .s3., !Ref 'AWS::Region', .amazonaws.com]], /AvidNEXIS_26.6/Release/557]], /cloudformation/stack/iam-s3policy.yaml]]
+      TimeoutInMinutes: 20
+      Parameters:
+        SystemName: !Ref SystemName
+  SD:
+    Condition: PasswordsMatch
+    Type: AWS::CloudFormation::Stack
+    DependsOn: [SG, PolicySD]
+    Properties:
+      TemplateURL: !Join ['', [!Join ['', [!Join ['', ['https://', !Join ['', [!Ref S3Bucket, '-', !Ref 'AWS::Region']], .s3., !Ref 'AWS::Region', .amazonaws.com]], /AvidNEXIS_26.6/Release/557]], /cloudformation/stack/ec2-sd.yaml]]
+      TimeoutInMinutes: 35
+      Parameters:
+        CloudPlatform: 0100-42307-00
+        SystemName: !Ref SystemName
+        SecurityGroupId: !GetAtt SG.Outputs.SecurityGroupSD
+        KeyName: !Ref KeyName
+        AssociatePublicIp: false
+        MetadataVolumeSize: 632
+        S3Bucket: !Ref S3Bucket
+        SubnetId: !Ref SubnetId
+        InstanceType: !Ref InstanceTypeSD
+        AdminPassword: !Ref AdminPassword
+        Tags: !Ref Tags
+        EnableCloudWatchLogs: !Ref EnableCloudWatchLogs
+        CloudWatchLogsRetention: !Ref CloudWatchLogsRetention
+        MessagesLogGroup: !Ref MessagesLogGroup
+        RolePolicy: !GetAtt PolicySD.Outputs.PolicyARN
+        BoundaryPolicy: !Ref BoundaryPolicy
+        PRMProductCode: 2d543tly8e1kuax6xp7pv7qin
+        AwsAvidNexiscloudTag: s3-v1
+Outputs:
+  SubnetId:
+    Description: Subnet Id
+    Value: !Ref SubnetId
+  SystemDirector:
+    Description: System Director
+    Value: !GetAtt SD.Outputs.EC2InstanceSd
+  SecurityGroupSD:
+    Description: SecurityGroupSD
+    Value: !GetAtt SG.Outputs.SecurityGroupSD
+  SecurityGroupClient:
+    Description: SecurityGroupClient
+    Value: !GetAtt SG.Outputs.SecurityGroupClient

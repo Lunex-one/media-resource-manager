@@ -218,6 +218,17 @@ export class StorageStack extends cdk.Stack {
     // Grant DynamoDB read permissions to template generator (for regional hub network config)
     props.regionalHubsTable.grantReadData(this.functions.generateFsxTemplate);
 
+    // Dedicated EC2 KeyPair for MRM-managed storage appliances that require one (currently
+    // just Avid NEXIS's System Director). Nothing ever actually SSHes in - the instance is
+    // managed via SSM - but Avid's template schema mandates an existing KeyPair name, so
+    // one persistent, CDK-managed key is reused across every NEXIS deployment rather than
+    // generating a throwaway key per storage instance.
+    const storageApplianceKeyName = `${props.acronym.toLowerCase()}-storage-appliance-key`;
+    new ec2.CfnKeyPair(this, 'StorageApplianceKeyPair', {
+      keyName: storageApplianceKeyName,
+    });
+    this.functions.generateFsxTemplate.addEnvironment('STORAGE_APPLIANCE_KEY_NAME', storageApplianceKeyName);
+
     // Storage CloudFormation Worker Function - handles cross-region CloudFormation operations
     this.functions.storageCfnWorker = new lambda.Function(this, 'StorageCfnWorkerFunction', {
       functionName: `${props.acronym.toLowerCase()}-storage-cfn-worker`,
@@ -254,6 +265,64 @@ export class StorageStack extends cdk.Stack {
         'ssm:GetParameters'
       ],
       resources: ['*'] // Cross-region requires wildcard
+    }));
+
+    // Grant EC2 instance/security-group/log-group creation permissions - needed for
+    // Avid NEXIS's nested CFN stacks (System Director EC2 instance + security groups),
+    // which FSx's managed-service resources never required before.
+    this.functions.storageCfnWorker.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'ec2:RunInstances',
+        'ec2:TerminateInstances',
+        'ec2:DescribeInstances',
+        'ec2:DescribeInstanceStatus',
+        'ec2:CreateTags',
+        'ec2:DescribeTags',
+        'ec2:CreateSecurityGroup',
+        'ec2:DeleteSecurityGroup',
+        'ec2:DescribeSecurityGroups',
+        'ec2:AuthorizeSecurityGroupIngress',
+        'ec2:AuthorizeSecurityGroupEgress',
+        'ec2:RevokeSecurityGroupIngress',
+        'ec2:RevokeSecurityGroupEgress',
+        'ec2:DescribeVolumes',
+        'ec2:DescribeSubnets',
+        'ec2:DescribeVpcs',
+        'ec2:DescribeImages',
+        'ec2:DescribeKeyPairs',
+        'logs:CreateLogGroup',
+        'logs:DeleteLogGroup',
+        'logs:PutRetentionPolicy',
+        'logs:DescribeLogGroups'
+      ],
+      resources: ['*'] // Cross-region requires wildcard
+    }));
+
+    // Grant IAM role/instance-profile creation permissions - Avid NEXIS's nested CFN
+    // stacks create an InstanceRole + InstanceProfile for the System Director instance.
+    // Scoped to the Avid-NEXIS path Avid's own templates use for these resources.
+    this.functions.storageCfnWorker.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'iam:CreateRole',
+        'iam:DeleteRole',
+        'iam:GetRole',
+        'iam:PutRolePolicy',
+        'iam:DeleteRolePolicy',
+        'iam:GetRolePolicy',
+        'iam:TagRole',
+        'iam:PassRole',
+        'iam:CreateInstanceProfile',
+        'iam:DeleteInstanceProfile',
+        'iam:GetInstanceProfile',
+        'iam:AddRoleToInstanceProfile',
+        'iam:RemoveRoleFromInstanceProfile'
+      ],
+      resources: [
+        `arn:aws:iam::${this.account}:role/Avid-NEXIS/*`,
+        `arn:aws:iam::${this.account}:instance-profile/Avid-NEXIS/*`
+      ]
     }));
 
     // Grant cross-region FSx permissions for storage creation in regional hubs
@@ -833,7 +902,7 @@ export class StorageStack extends cdk.Stack {
                 "S.$": "$.storageId"
               }
             },
-            UpdateExpression: "SET #status = :status, #updatedAt = :updatedAt, cloudFormationStackName = :stackName, fsxFileSystemId = :fsxId, fsxDnsName = :fsxDns, fsxResourceArn = :fsxArn, parsedOutputs = :outputs",
+            UpdateExpression: "SET #status = :status, #updatedAt = :updatedAt, cloudFormationStackName = :stackName, fsxFileSystemId = :fsxId, fsxDnsName = :fsxDns, fsxResourceArn = :fsxArn, systemDirectorInstanceId = :sdInstanceId, securityGroupSD = :sgSd, securityGroupClient = :sgClient, parsedOutputs = :outputs",
             ExpressionAttributeNames: {
               "#status": "status",
               "#updatedAt": "updatedAt"
@@ -856,6 +925,15 @@ export class StorageStack extends cdk.Stack {
               },
               ":fsxArn": {
                 "S.$": "$.parsedOutputs.fsxResourceArn"
+              },
+              ":sdInstanceId": {
+                "S.$": "$.parsedOutputs.systemDirectorInstanceId"
+              },
+              ":sgSd": {
+                "S.$": "$.parsedOutputs.securityGroupSD"
+              },
+              ":sgClient": {
+                "S.$": "$.parsedOutputs.securityGroupClient"
               },
               ":outputs": {
                 "S.$": "States.JsonToString($.parsedOutputs)"

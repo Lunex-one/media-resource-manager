@@ -44,6 +44,14 @@ async function validateRegion(region, storageType) {
       error: 'FSx for Windows File Server can only be created in the primary region due to Active Directory requirements' 
     };
   }
+
+  // Avid NEXIS System Director is currently primary-region only
+  if (storageType === 'nexis') {
+    return {
+      valid: false,
+      error: 'Avid NEXIS is currently only supported in the primary region'
+    };
+  }
   
   // For other storage types, check if regional hub exists and is available
   if (!REGIONAL_HUBS_TABLE) {
@@ -129,6 +137,8 @@ exports.handler = async (event) => {
       return await createFsxWindowsStorage(storageId, data, configuration, createdAt, targetRegion);
     } else if (storageType === 'fsx-ontap') {
       return await createFsxOntapStorage(storageId, data, configuration, createdAt, targetRegion);
+    } else if (storageType === 'nexis') {
+      return await createNexisStorage(storageId, data, configuration, createdAt);
     } else {
       return {
         statusCode: 400,
@@ -460,6 +470,85 @@ async function createFsxOntapStorage(storageId, data, configuration, createdAt, 
         throughput: totalThroughput,
         haPairs: configuration.haPairs,
         deploymentType: configuration.deploymentType,
+        configuration,
+        createdAt
+      }
+    })
+  };
+}
+
+/**
+ * Create Avid NEXIS System Director storage resource.
+ * Primary region only for now. Deploys Avid's vendored CloudFormation template via
+ * the same Step Functions state machine FSx uses (generate template -> create/poll
+ * CFN stack -> parse outputs -> mark available).
+ */
+async function createNexisStorage(storageId, data, configuration, createdAt) {
+  const allowedInstanceTypes = ['c5.2xlarge', 'c5.4xlarge', 'c6i.2xlarge', 'c6i.4xlarge'];
+  const instanceType = configuration.instanceType || 'c5.2xlarge';
+  if (!allowedInstanceTypes.includes(instanceType)) {
+    return {
+      statusCode: 400,
+      headers: corsHeaders,
+      body: JSON.stringify({
+        success: false,
+        error: `Invalid instanceType for Avid NEXIS: ${instanceType}. Must be one of: ${allowedInstanceTypes.join(', ')}`
+      })
+    };
+  }
+
+  const item = {
+    storageId,
+    createdAt,
+    name: data.name,
+    type: 'nexis',
+    description: data.description || '',
+    status: 'initializing',
+    platform: 'multi', // NEXIS client is installable on Windows, Linux, and macOS
+    region: PRIMARY_REGION,
+    instanceType,
+    configuration
+  };
+
+  console.log('Creating Avid NEXIS storage item:', item);
+
+  await dynamodb.send(new PutCommand({
+    TableName: process.env.STORAGE_TABLE_NAME,
+    Item: item
+  }));
+
+  console.log('Storage item created successfully');
+
+  const executionName = `storage-creation-${storageId}-${Date.now()}`;
+  console.log('Starting Step Functions execution:', executionName);
+
+  await sfn.send(new StartExecutionCommand({
+    stateMachineArn: process.env.STORAGE_CREATION_STATE_MACHINE_ARN,
+    input: JSON.stringify({
+      storageId,
+      name: data.name,
+      type: 'nexis',
+      region: PRIMARY_REGION,
+      configuration: { ...configuration, instanceType }
+    }),
+    name: executionName
+  }));
+
+  console.log('Step Functions execution started successfully');
+
+  return {
+    statusCode: 201,
+    headers: corsHeaders,
+    body: JSON.stringify({
+      success: true,
+      data: {
+        storageId,
+        name: data.name,
+        type: 'nexis',
+        status: 'initializing',
+        platform: 'multi',
+        region: PRIMARY_REGION,
+        instanceType,
         configuration,
         createdAt
       }

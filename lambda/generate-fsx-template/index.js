@@ -1,13 +1,17 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+const fs = require('fs');
+const path = require('path');
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, GetCommand } = require('@aws-sdk/lib-dynamodb');
 const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
+const { SSMClient, GetParameterCommand } = require('@aws-sdk/client-ssm');
 
 const dynamoClient = new DynamoDBClient({});
 const dynamodb = DynamoDBDocumentClient.from(dynamoClient);
 const secretsManager = new SecretsManagerClient({});
+const ssm = new SSMClient({});
 
 const PRIMARY_REGION = process.env.AWS_REGION;
 const REGIONAL_HUBS_TABLE = process.env.REGIONAL_HUBS_TABLE_NAME;
@@ -525,6 +529,49 @@ async function getAdCredentials(productName) {
 }
 
 
+
+/**
+ * Sanitize a storage name into a valid Avid NEXIS SystemName:
+ * 3-21 chars, lowercase alphanumeric + hyphen, must start and end with alphanumeric.
+ */
+function sanitizeNexisSystemName(name) {
+  let s = String(name).toLowerCase().replace(/[^a-z0-9-]/g, '-');
+  s = s.replace(/^-+|-+$/g, '');
+  s = s.substring(0, 21);
+  s = s.replace(/-+$/g, '');
+  while (s.length < 3) {
+    s += '0';
+  }
+  return s;
+}
+
+/**
+ * Load the vendored Avid NEXIS CloudFormation template (System Director only -
+ * the client template is intentionally not used; MRM installs the NEXIS client
+ * onto its own workstations instead of provisioning Avid's separate client EC2).
+ */
+function loadNexisTemplate() {
+  return fs.readFileSync(path.join(__dirname, 'templates', 'avid-nexis.yaml'), 'utf8');
+}
+
+/**
+ * Resolve primary-region VPC/Subnet via SSM. Unlike the ONTAP template (a JS-object
+ * template we control, where {{resolve:ssm:...}} can be embedded directly), the NEXIS
+ * template is Avid's own unmodified YAML supplied as plain CreateStack Parameters, so
+ * these need to be resolved to literal values here rather than deferred to CloudFormation.
+ */
+async function getPrimaryNetworkConfigForNexis(productName) {
+  const [vpcParam, subnetParam] = await Promise.all([
+    ssm.send(new GetParameterCommand({ Name: `/${productName}/Network/VpcId` })),
+    ssm.send(new GetParameterCommand({ Name: `/${productName}/Network/PrivateSubnet1/SubnetID` })),
+  ]);
+  return {
+    vpcId: vpcParam.Parameter.Value,
+    subnetId: subnetParam.Parameter.Value,
+  };
+}
+
+
 exports.handler = async (event) => {
   console.log('GenerateFsxTemplate received event:', JSON.stringify(event, null, 2));
 
@@ -573,6 +620,30 @@ exports.handler = async (event) => {
       { ParameterKey: 'AdminPassword', ParameterValue: adminPassword },
       { ParameterKey: 'StorageId', ParameterValue: storageId }
     ];
+  } else if (type === 'nexis') {
+    // Avid NEXIS System Director - vendored template (System Director only, not
+    // Avid's separate client EC2 - MRM installs the NEXIS client onto its own
+    // workstations instead). Network config is resolved to literal values here
+    // since this is Avid's unmodified template, not a JS-object template we
+    // control where {{resolve:ssm:...}} could be embedded directly.
+    const networkConfig = await getPrimaryNetworkConfigForNexis(productName);
+    const systemName = sanitizeNexisSystemName(name);
+    const adminPassword = generateOntapPassword();
+
+    template = loadNexisTemplate();
+    parameters = [
+      { ParameterKey: 'VPC', ParameterValue: networkConfig.vpcId },
+      { ParameterKey: 'SubnetId', ParameterValue: networkConfig.subnetId },
+      { ParameterKey: 'SystemName', ParameterValue: systemName },
+      { ParameterKey: 'KeyName', ParameterValue: process.env.STORAGE_APPLIANCE_KEY_NAME },
+      { ParameterKey: 'InstanceTypeSD', ParameterValue: configuration.instanceType || 'c5.2xlarge' },
+      { ParameterKey: 'AdminPassword', ParameterValue: adminPassword },
+      { ParameterKey: 'ConfirmPassword', ParameterValue: adminPassword },
+      { ParameterKey: 'Tags', ParameterValue: '' },
+      { ParameterKey: 'EnableCloudWatchLogs', ParameterValue: (configuration.enableCloudWatchLogs || false).toString() },
+      { ParameterKey: 'CloudWatchLogsRetention', ParameterValue: (configuration.cloudWatchLogsRetention || 14).toString() },
+      { ParameterKey: 'BoundaryPolicy', ParameterValue: '' },
+    ];
   } else {
     // FSx Windows - retrieve AD credentials from Secrets Manager
     // This avoids KMS permission issues with CloudFormation's {{resolve:secretsmanager:...}} dynamic references
@@ -593,7 +664,7 @@ exports.handler = async (event) => {
   return {
     storageId,
     stackName,
-    template: JSON.stringify(template),
+    template: typeof template === 'string' ? template : JSON.stringify(template),
     parameters,
     region: region || PRIMARY_REGION
   };

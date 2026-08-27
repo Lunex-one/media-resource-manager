@@ -40,6 +40,10 @@ exports.handler = async (event) => {
     case 'storage-gateway':
       result = parseStorageGatewayOutputs(outputMap);
       break;
+
+    case 'nexis':
+      result = parseNexisOutputs(outputMap);
+      break;
       
     default:
       // Generic fallback - just pass through all outputs
@@ -58,7 +62,12 @@ function parseFsxWindowsOutputs(outputMap) {
   return {
     fsxFileSystemId: outputMap.FsxFileSystemId || 'N/A',
     fsxDnsName: outputMap.FsxDnsName || 'N/A',
-    fsxResourceArn: outputMap.FsxResourceArn || 'N/A'
+    fsxResourceArn: outputMap.FsxResourceArn || 'N/A',
+    // Placeholders so the shared UpdateStatusToAvailable state's JSONPath
+    // references always resolve, regardless of which storage type ran.
+    systemDirectorInstanceId: 'N/A',
+    securityGroupSD: 'N/A',
+    securityGroupClient: 'N/A'
   };
 }
 
@@ -75,7 +84,31 @@ function parseFsxOntapOutputs(outputMap) {
     svmId: outputMap.SvmId || 'N/A',
     svmArn: outputMap.SvmArn || 'N/A',
     volumeId: outputMap.VolumeId || 'N/A',
-    junctionPath: outputMap.JunctionPath || '/vol1'
+    junctionPath: outputMap.JunctionPath || '/vol1',
+    // Placeholders so the shared UpdateStatusToAvailable state's JSONPath
+    // references always resolve, regardless of which storage type ran.
+    systemDirectorInstanceId: 'N/A',
+    securityGroupSD: 'N/A',
+    securityGroupClient: 'N/A'
+  };
+}
+
+/**
+ * Parse Avid NEXIS System Director outputs.
+ * Resolving the System Director's private IP (needed to point a NEXIS client's
+ * "remote hosts" entry at it) is deferred to the client-mounting phase, not done
+ * here - matching how ONTAP's SVM DNS is resolved at mount time, not here either.
+ */
+function parseNexisOutputs(outputMap) {
+  return {
+    systemDirectorInstanceId: outputMap.SystemDirector || 'N/A',
+    securityGroupSD: outputMap.SecurityGroupSD || 'N/A',
+    securityGroupClient: outputMap.SecurityGroupClient || 'N/A',
+    // Placeholders so the shared UpdateStatusToAvailable state's JSONPath
+    // references always resolve, regardless of which storage type ran.
+    fsxFileSystemId: 'N/A',
+    fsxDnsName: 'N/A',
+    fsxResourceArn: 'N/A'
   };
 }
 
