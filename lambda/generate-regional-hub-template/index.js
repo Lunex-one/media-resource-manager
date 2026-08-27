@@ -829,6 +829,26 @@ function generateCloudFormationTemplate(config) {
                   Resource: { 'Fn::Sub': `arn:aws:secretsmanager:${primaryRegion}:\${AWS::AccountId}:secret:/\${ProductName}/Workstation/*` }
                 }]
               }
+            },
+            {
+              // Mountpoint for S3 (Linux) and rclone (Windows) mounting - matches the
+              // primary-region WorkstationInstanceRole's MountpointS3Access policy
+              PolicyName: 'MountpointS3Access',
+              PolicyDocument: {
+                Version: '2012-10-17',
+                Statement: [
+                  {
+                    Effect: 'Allow',
+                    Action: ['s3:ListBucket'],
+                    Resource: 'arn:aws:s3:::*'
+                  },
+                  {
+                    Effect: 'Allow',
+                    Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+                    Resource: 'arn:aws:s3:::*/*'
+                  }
+                ]
+              }
             }
           ]
         }

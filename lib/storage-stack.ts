@@ -483,6 +483,14 @@ export class StorageStack extends cdk.Stack {
       resources: ['*'],
     }));
 
+    // Resolve a bucket's actual region at mount time (rclone on Windows needs the real
+    // region for request signing, unlike Linux's Mountpoint-S3)
+    this.functions.s3MountManager.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['s3:GetBucketLocation'],
+      resources: ['*'],
+    }));
+
     // FSx NFS Mount Manager Function (for FSx for NetApp ONTAP on Linux/macOS)
     // Note: Keep construct ID as 'NfsMountManagerFunction' to preserve CloudFormation logical ID
     this.functions.nfsMountManager = new lambda.Function(this, 'NfsMountManagerFunction', {
