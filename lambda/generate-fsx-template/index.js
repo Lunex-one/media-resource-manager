@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, GetCommand } = require('@aws-sdk/lib-dynamodb');
-const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
+const { SecretsManagerClient, GetSecretValueCommand, CreateSecretCommand, PutSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
 const { SSMClient, GetParameterCommand } = require('@aws-sdk/client-ssm');
 
 const dynamoClient = new DynamoDBClient({});
@@ -631,6 +631,21 @@ exports.handler = async (event) => {
       : await getPrimaryNetworkConfigForNexis(productName);
     const systemName = sanitizeNexisSystemName(name);
     const adminPassword = generateOntapPassword();
+
+    // Store the generated admin password so it can be retrieved after deployment to log
+    // into the NEXIS System Director console and complete licensing/setup - "admin" is
+    // an assumed default username; confirm the actual one against Avid's login screen.
+    const nexisSecretName = `/${productName}/Storage/${storageId}/NexisAdminPassword`;
+    const nexisSecretValue = JSON.stringify({ username: 'admin', password: adminPassword });
+    try {
+      await secretsManager.send(new CreateSecretCommand({ Name: nexisSecretName, SecretString: nexisSecretValue }));
+    } catch (err) {
+      if (err.name === 'ResourceExistsException') {
+        await secretsManager.send(new PutSecretValueCommand({ SecretId: nexisSecretName, SecretString: nexisSecretValue }));
+      } else {
+        throw err;
+      }
+    }
 
     template = loadNexisTemplate();
     parameters = [

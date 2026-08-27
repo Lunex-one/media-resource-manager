@@ -210,6 +210,18 @@ export class StorageStack extends cdk.Stack {
       resources: [`arn:aws:secretsmanager:${this.region}:${this.account}:secret:/${props.pascalCaseName}/Identity/*`]
     }));
 
+    // Grant Secrets Manager write permissions for storing generated storage admin
+    // passwords (e.g. Avid NEXIS's System Director admin password) for later retrieval
+    this.functions.generateFsxTemplate.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'secretsmanager:CreateSecret',
+        'secretsmanager:PutSecretValue',
+        'secretsmanager:TagResource'
+      ],
+      resources: [`arn:aws:secretsmanager:${this.region}:${this.account}:secret:/${props.pascalCaseName}/Storage/*`]
+    }));
+
     // Grant KMS decrypt permissions to template generator (for decrypting AD credentials secret)
     if (props.dataEncryptionKey) {
       props.dataEncryptionKey.grantDecrypt(this.functions.generateFsxTemplate);

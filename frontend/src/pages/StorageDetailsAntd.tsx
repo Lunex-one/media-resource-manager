@@ -324,6 +324,12 @@ umount ${details.mountPath}`;
                   {details.securityGroupClient && details.securityGroupClient !== 'N/A' && <Descriptions.Item label="Client Security Group">{details.securityGroupClient}</Descriptions.Item>}
                   {details.securityGroupSD && details.securityGroupSD !== 'N/A' && <Descriptions.Item label="System Director Security Group">{details.securityGroupSD}</Descriptions.Item>}
                 </Descriptions>
+                <Text type="secondary" style={{ display: 'block', marginTop: 12, marginBottom: 4 }}>
+                  Retrieve the System Director admin password (run this in a terminal with AWS CLI access):
+                </Text>
+                <Paragraph copyable code style={{ marginBottom: 0 }}>
+                  {`aws secretsmanager get-secret-value --secret-id "/${config?.productName || 'MediaResourceManager'}/Storage/${details.storageId}/NexisAdminPassword" --query 'SecretString' --output text | grep -o '"password":"[^"]*"' | cut -d'"' -f4`}
+                </Paragraph>
               </div>
             </>
           )}
