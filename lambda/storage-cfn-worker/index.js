@@ -79,7 +79,7 @@ async function createStack(cfn, stackName, templateBody, parameters, region) {
       StackName: stackName,
       TemplateBody: templateBody,
       Parameters: parameters || [],
-      Capabilities: ['CAPABILITY_IAM', 'CAPABILITY_NAMED_IAM'],
+      Capabilities: ['CAPABILITY_IAM', 'CAPABILITY_NAMED_IAM', 'CAPABILITY_AUTO_EXPAND'],
       Tags: [
         { Key: 'ManagedBy', Value: process.env.PRODUCT_NAME || 'MediaResourceManager' },
         { Key: 'CreatedBy', Value: 'StorageStateMachine' },

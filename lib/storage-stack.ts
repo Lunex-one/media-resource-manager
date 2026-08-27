@@ -252,7 +252,14 @@ export class StorageStack extends cdk.Stack {
         'cloudformation:CreateStack',
         'cloudformation:DescribeStacks',
         'cloudformation:DeleteStack',
-        'cloudformation:DescribeStackEvents'
+        'cloudformation:DescribeStackEvents',
+        // Needed for any nested template using a CloudFormation transform (e.g. Avid
+        // NEXIS's ec2-sd.yaml uses AWS::Include) - CloudFormation creates an internal
+        // change set against the transform's pseudo-ARN to expand it.
+        'cloudformation:CreateChangeSet',
+        'cloudformation:DescribeChangeSet',
+        'cloudformation:ExecuteChangeSet',
+        'cloudformation:DeleteChangeSet'
       ],
       resources: ['*'] // Cross-region requires wildcard
     }));
@@ -265,6 +272,19 @@ export class StorageStack extends cdk.Stack {
         'ssm:GetParameters'
       ],
       resources: ['*'] // Cross-region requires wildcard
+    }));
+
+    // Grant read access to Avid's own regionally-replicated distribution buckets.
+    // Avid NEXIS's ec2-sd.yaml uses Fn::Transform: AWS::Include to pull in template
+    // snippets from S3 - CloudFormation performs this as a signed request using the
+    // CreateStack caller's own identity, so even though Avid's bucket policy allows
+    // anonymous public reads, this Lambda's own IAM identity still needs explicit
+    // s3:GetObject (IAM's implicit deny applies to signed requests regardless of the
+    // resource's own public policy).
+    this.functions.storageCfnWorker.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['s3:GetObject', 's3:GetObjectVersion', 's3:ListBucket'],
+      resources: ['arn:aws:s3:::avid-deployments-*', 'arn:aws:s3:::avid-deployments-*/*']
     }));
 
     // Grant EC2 instance/security-group/log-group creation permissions - needed for
@@ -294,14 +314,19 @@ export class StorageStack extends cdk.Stack {
         'logs:CreateLogGroup',
         'logs:DeleteLogGroup',
         'logs:PutRetentionPolicy',
-        'logs:DescribeLogGroups'
+        'logs:DescribeLogGroups',
+        'logs:TagResource',
+        'logs:UntagResource'
       ],
       resources: ['*'] // Cross-region requires wildcard
     }));
 
-    // Grant IAM role/instance-profile creation permissions - Avid NEXIS's nested CFN
-    // stacks create an InstanceRole + InstanceProfile for the System Director instance.
-    // Scoped to the Avid-NEXIS path Avid's own templates use for these resources.
+    // Grant IAM role/instance-profile/managed-policy creation permissions - Avid
+    // NEXIS's nested CFN stacks create an InstanceRole, InstanceProfile, and a
+    // standalone IAM::ManagedPolicy (S3BucketAccessPolicy) for the System Director.
+    // These get CloudFormation-generated names rather than a predictable path, so
+    // (matching how this Lambda's other cross-region grants in this file are already
+    // scoped) resources are wildcarded rather than guessed at.
     this.functions.storageCfnWorker.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: [
@@ -317,12 +342,33 @@ export class StorageStack extends cdk.Stack {
         'iam:DeleteInstanceProfile',
         'iam:GetInstanceProfile',
         'iam:AddRoleToInstanceProfile',
-        'iam:RemoveRoleFromInstanceProfile'
+        'iam:RemoveRoleFromInstanceProfile',
+        'iam:AttachRolePolicy',
+        'iam:DetachRolePolicy',
+        'iam:CreatePolicy',
+        'iam:DeletePolicy',
+        'iam:GetPolicy',
+        'iam:CreatePolicyVersion',
+        'iam:DeletePolicyVersion',
+        'iam:ListPolicyVersions',
+        'iam:TagPolicy'
       ],
-      resources: [
-        `arn:aws:iam::${this.account}:role/Avid-NEXIS/*`,
-        `arn:aws:iam::${this.account}:instance-profile/Avid-NEXIS/*`
-      ]
+      resources: ['*'] // Cross-region + CFN-generated names require wildcard
+    }));
+
+    // Grant DLM (Data Lifecycle Manager) permissions - Avid NEXIS's ec2-sd.yaml sets up
+    // an automated EBS snapshot backup policy for the System Director's metadata volume.
+    this.functions.storageCfnWorker.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'dlm:CreateLifecyclePolicy',
+        'dlm:GetLifecyclePolicy',
+        'dlm:UpdateLifecyclePolicy',
+        'dlm:DeleteLifecyclePolicy',
+        'dlm:TagResource',
+        'dlm:ListTagsForResource'
+      ],
+      resources: ['*'] // Cross-region requires wildcard
     }));
 
     // Grant cross-region FSx permissions for storage creation in regional hubs

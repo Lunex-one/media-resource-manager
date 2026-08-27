@@ -56,6 +56,7 @@ interface StorageResource {
   createdAt?: string;
   fsxFileSystemId?: string;
   storageGatewayId?: string;
+  systemDirectorInstanceId?: string;
 }
 
 interface RegionalHub {
@@ -396,17 +397,24 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
     }
   };
 
+  // A placed generated output field (e.g. fsxFileSystemId) that doesn't apply to a
+  // given storage type is stored as the literal string 'N/A', not empty - filter that
+  // out so it doesn't win a `||` fallback chain ahead of a real value.
+  const realValue = (v?: string) => (v && v !== 'N/A' ? v : undefined);
+  const getResourceId = (record: StorageResource) =>
+    realValue(record.fsxFileSystemId) || realValue(record.systemDirectorInstanceId) || record.storageGatewayId || record.storageId;
+
   // Columns
   const columns: ColumnsType<StorageResource> = [
     {
       title: 'Resource ID',
       key: 'resourceId',
       width: 180,
-      sorter: (a, b) => (a.fsxFileSystemId || '').localeCompare(b.fsxFileSystemId || ''),
+      sorter: (a, b) => getResourceId(a).localeCompare(getResourceId(b)),
       sortOrder: sortedInfo?.columnKey === 'resourceId' ? sortedInfo.order : null,
       render: (_, record) => (
         <Link onClick={() => (window.location.href = `/storage/${record.storageId}`)}>
-          {record.fsxFileSystemId || record.storageGatewayId || record.storageId}
+          {getResourceId(record)}
         </Link>
       ),
     },

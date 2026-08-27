@@ -299,15 +299,30 @@ umount ${details.mountPath}`;
             )}
           </div>
 
-          {(details.fsxFileSystemId || details.fsxDnsName || details.fsxResourceArn) && (
+          {((details.fsxFileSystemId && details.fsxFileSystemId !== 'N/A') || (details.fsxDnsName && details.fsxDnsName !== 'N/A') || (details.fsxResourceArn && details.fsxResourceArn !== 'N/A')) && (
             <>
               <Divider style={{ margin: 0 }} />
               <div>
                 <Text strong style={{ fontSize: 14, display: 'block', marginBottom: 12 }}>FSx File System</Text>
                 <Descriptions column={{ xs: 1, sm: 2 }} size="small">
-                  {details.fsxFileSystemId && <Descriptions.Item label="File System ID">{details.fsxFileSystemId}</Descriptions.Item>}
+                  {details.fsxFileSystemId && details.fsxFileSystemId !== 'N/A' && <Descriptions.Item label="File System ID">{details.fsxFileSystemId}</Descriptions.Item>}
                   {details.fsxDnsName && details.fsxDnsName !== 'N/A' && <Descriptions.Item label="DNS Name">{details.fsxDnsName}</Descriptions.Item>}
-                  {details.fsxResourceArn && <Descriptions.Item label="Resource ARN" span={2}>{details.fsxResourceArn}</Descriptions.Item>}
+                  {details.fsxResourceArn && details.fsxResourceArn !== 'N/A' && <Descriptions.Item label="Resource ARN" span={2}>{details.fsxResourceArn}</Descriptions.Item>}
+                </Descriptions>
+              </div>
+            </>
+          )}
+
+          {details.systemDirectorInstanceId && details.systemDirectorInstanceId !== 'N/A' && (
+            <>
+              <Divider style={{ margin: 0 }} />
+              <div>
+                <Text strong style={{ fontSize: 14, display: 'block', marginBottom: 12 }}>Avid NEXIS System Director</Text>
+                <Descriptions column={{ xs: 1, sm: 2 }} size="small">
+                  <Descriptions.Item label="System Director Instance ID">{details.systemDirectorInstanceId}</Descriptions.Item>
+                  {details.instanceType && <Descriptions.Item label="Instance Type">{details.instanceType}</Descriptions.Item>}
+                  {details.securityGroupClient && details.securityGroupClient !== 'N/A' && <Descriptions.Item label="Client Security Group">{details.securityGroupClient}</Descriptions.Item>}
+                  {details.securityGroupSD && details.securityGroupSD !== 'N/A' && <Descriptions.Item label="System Director Security Group">{details.securityGroupSD}</Descriptions.Item>}
                 </Descriptions>
               </div>
             </>
