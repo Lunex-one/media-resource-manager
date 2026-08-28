@@ -1025,12 +1025,18 @@ const WorkstationManagementAntd: React.FC<WorkstationManagementAntdProps> = ({
             platformCompatible = selectedPlatforms.has('windows');
           } else if (storage.type === 'fsx-ontap') {
             platformCompatible = true; // Works on all platforms
+          } else if (storage.type === 'nexis') {
+            platformCompatible = true; // NEXIS client is installable on any platform
           }
 
           if (!platformCompatible) return false;
 
-          // Check region compatibility for FSx storage types
-          if (storage.type === 'fsx-windows' || storage.type === 'fsx-ontap') {
+          // Check region compatibility for FSx storage types. NEXIS is included here
+          // too, and for a more fundamental reason than the others: granting access is
+          // a security-group membership change, and security groups are strictly
+          // VPC/region-bound - a workstation in a different region literally cannot be
+          // added to a NEXIS System Director's client security group.
+          if (storage.type === 'fsx-windows' || storage.type === 'fsx-ontap' || storage.type === 'nexis') {
             const storageRegion = storage.region || 'us-east-1';
             if (!selectedRegions.has(storageRegion)) return false;
           }
@@ -2595,6 +2601,11 @@ const WorkstationManagementAntd: React.FC<WorkstationManagementAntdProps> = ({
                                   junctionPath: item.junctionPath || '/vol1',
                                 });
                               }
+                            } else if (item.type === 'nexis') {
+                              newAssignments.push({
+                                storageId: item.storageId,
+                                autoMount: checked,
+                              });
                             } else {
                               newAssignments.push({
                                 storageId: item.storageId,
@@ -2615,6 +2626,18 @@ const WorkstationManagementAntd: React.FC<WorkstationManagementAntdProps> = ({
                   render: (_: any, item: any) => {
                     const assignment = storageAssignments.find((a: any) => a.storageId === item.storageId);
                     const selectedPlatform = selectedWorkstations[0]?.platform?.toLowerCase() || 'windows';
+
+                    // NEXIS has no MRM-assigned mount path or drive letter - a NEXIS
+                    // system contains many workspaces, and the user picks which one to
+                    // mount to which drive letter dynamically inside the NEXIS client.
+                    // Enabling access here only grants network reachability.
+                    if (item.type === 'nexis') {
+                      return (
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          Network access only - mount workspaces via the NEXIS client
+                        </Text>
+                      );
+                    }
 
                     // For Mountpoint S3, show the mount path (read-only)
                     if (item.type === 'mountpoint-s3') {

@@ -756,6 +756,40 @@ export class ApiStack extends cdk.Stack {
       resources: ['*'],
     }));
 
+    // Avid NEXIS Network Access Manager - reconciles a workstation's network interface
+    // security groups against its desired NEXIS access. Platform-agnostic (unlike the
+    // SMB/NFS mount managers) since it's purely a network change, not a filesystem mount.
+    const nexisNetworkAccessManagerFunction = new lambda.Function(this, 'NexisNetworkAccessManagerFunction', {
+      functionName: `${props.acronym.toLowerCase()}-nexis-network-access-manager`,
+      runtime: lambda.Runtime.NODEJS_22_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset('lambda/nexis-network-access-manager'),
+      timeout: cdk.Duration.seconds(30),
+      reservedConcurrentExecutions: 5,
+      description: 'Reconcile workstation network interface security groups for Avid NEXIS access',
+      environmentEncryption: props.dataEncryptionKey,
+      environment: {
+        STORAGE_TABLE_NAME: props.storageTable.tableName,
+        WORKSTATION_TABLE_NAME: props.workstationTable.tableName,
+      }
+    });
+
+    props.storageTable.grantReadData(nexisNetworkAccessManagerFunction);
+    props.workstationTable.grantReadData(nexisNetworkAccessManagerFunction);
+
+    if (props.dataEncryptionKey) {
+      props.dataEncryptionKey.grantDecrypt(nexisNetworkAccessManagerFunction);
+    }
+
+    nexisNetworkAccessManagerFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'ec2:DescribeInstances',
+        'ec2:ModifyNetworkInterfaceAttribute'
+      ],
+      resources: ['*'], // Cross-region (regional hub workstations) requires wildcard
+    }));
+
     // Workstation Management Lambda function
     const workstationManagerFunction = new lambda.Function(this, 'WorkstationManagerFunction', {
       functionName: `${props.acronym.toLowerCase()}-workstation-manager`,
@@ -778,6 +812,7 @@ export class ApiStack extends cdk.Stack {
         FSX_NFS_MOUNT_MANAGER_FUNCTION_ARN: ssm.StringParameter.valueForStringParameter(
           this, `/${props.pascalCaseName}/Storage/NfsMountManagerFunctionArn`
         ),
+        NEXIS_NETWORK_ACCESS_MANAGER_FUNCTION_ARN: nexisNetworkAccessManagerFunction.functionArn,
         AMI_TABLE_NAME: props.amiTable.tableName,
         REGIONAL_HUBS_TABLE_NAME: props.regionalHubsTable.tableName,
       },
@@ -787,7 +822,8 @@ export class ApiStack extends cdk.Stack {
     });
 
     // Grant workstation manager permission to invoke mount manager functions
-    fsxSmbMountManagerFunction.grantInvoke(workstationManagerFunction);    // Grant permission to invoke NFS mount manager (using wildcard since ARN is from SSM)
+    fsxSmbMountManagerFunction.grantInvoke(workstationManagerFunction);
+    nexisNetworkAccessManagerFunction.grantInvoke(workstationManagerFunction);    // Grant permission to invoke NFS mount manager (using wildcard since ARN is from SSM)
     workstationManagerFunction.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ['lambda:InvokeFunction'],

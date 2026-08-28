@@ -1192,6 +1192,25 @@ async function updateWorkstation(instanceId, updateData) {
           console.error('Failed to trigger FSx NFS mount manager for instance', instanceId + ':', error);
         }
       }
+
+      // Trigger NEXIS network access reconciliation - platform-agnostic, unlike the
+      // mount managers above, since granting/revoking NEXIS access is a network
+      // interface security group change rather than a filesystem mount
+      if (process.env.NEXIS_NETWORK_ACCESS_MANAGER_FUNCTION_ARN) {
+        try {
+          await lambdaClient.send(new InvokeCommand({
+            FunctionName: process.env.NEXIS_NETWORK_ACCESS_MANAGER_FUNCTION_ARN,
+            InvocationType: 'Event', // Async invocation
+            Payload: JSON.stringify({
+              action: 'updateInstance',
+              instanceId: instanceId
+            })
+          }));
+          console.log(`NEXIS network access manager triggered for instance ${instanceId}`);
+        } catch (error) {
+          console.error('Failed to trigger NEXIS network access manager for instance', instanceId + ':', error);
+        }
+      }
     }
     
     return {
