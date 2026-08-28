@@ -320,6 +320,7 @@ umount ${details.mountPath}`;
                 <Text strong style={{ fontSize: 14, display: 'block', marginBottom: 12 }}>Avid NEXIS System Director</Text>
                 <Descriptions column={{ xs: 1, sm: 2 }} size="small">
                   <Descriptions.Item label="System Director Instance ID">{details.systemDirectorInstanceId}</Descriptions.Item>
+                  {details.systemDirectorPrivateIp && details.systemDirectorPrivateIp !== 'N/A' && <Descriptions.Item label="Private IP Address">{details.systemDirectorPrivateIp}</Descriptions.Item>}
                   {details.instanceType && <Descriptions.Item label="Instance Type">{details.instanceType}</Descriptions.Item>}
                   {details.securityGroupClient && details.securityGroupClient !== 'N/A' && <Descriptions.Item label="Client Security Group">{details.securityGroupClient}</Descriptions.Item>}
                   {details.securityGroupSD && details.securityGroupSD !== 'N/A' && <Descriptions.Item label="System Director Security Group">{details.securityGroupSD}</Descriptions.Item>}
@@ -328,7 +329,7 @@ umount ${details.mountPath}`;
                   Retrieve the System Director admin password (run this in a terminal with AWS CLI access):
                 </Text>
                 <Paragraph copyable code style={{ marginBottom: 0 }}>
-                  {`aws secretsmanager get-secret-value --secret-id "/${config?.productName || 'MediaResourceManager'}/Storage/${details.storageId}/NexisAdminPassword" --query 'SecretString' --output text | grep -o '"password":"[^"]*"' | cut -d'"' -f4`}
+                  {`aws secretsmanager get-secret-value --secret-id "/${(config?.productName || 'MediaResourceManager').replace(/[^a-zA-Z0-9]/g, '')}/Storage/${details.storageId}/NexisAdminPassword" --query 'SecretString' --output text | grep -o '"password":"[^"]*"' | cut -d'"' -f4`}
                 </Paragraph>
               </div>
             </>

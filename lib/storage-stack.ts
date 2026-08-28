@@ -441,6 +441,14 @@ export class StorageStack extends cdk.Stack {
       environmentEncryption: props.dataEncryptionKey,
     });
 
+    // Grant cross-region EC2 read permission - Avid NEXIS's System Director instance ID
+    // is resolved to a private IP here, needed for the NEXIS client's "remote hosts" entry.
+    this.functions.parseStackOutputs.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['ec2:DescribeInstances'],
+      resources: ['*'] // Cross-region requires wildcard
+    }));
+
     // Configure ONTAP CIFS Function - enables SMB for non-domain-joined Windows workstations
     // Needs VPC access to SSH to FSxN SVM management endpoint
     // For regional hubs, this Lambda routes to a regional Lambda deployed in the hub's VPC
@@ -893,7 +901,8 @@ export class StorageStack extends cdk.Stack {
           Resource: this.functions.parseStackOutputs.functionArn,
           Parameters: {
             "storageType.$": "$.type",
-            "stackStatus.$": "$.stackStatus"
+            "stackStatus.$": "$.stackStatus",
+            "region.$": "$.region"
           },
           ResultPath: "$.parsedOutputs",
           Next: "ConfigureOntapCifs",
@@ -960,7 +969,7 @@ export class StorageStack extends cdk.Stack {
                 "S.$": "$.storageId"
               }
             },
-            UpdateExpression: "SET #status = :status, #updatedAt = :updatedAt, cloudFormationStackName = :stackName, fsxFileSystemId = :fsxId, fsxDnsName = :fsxDns, fsxResourceArn = :fsxArn, systemDirectorInstanceId = :sdInstanceId, securityGroupSD = :sgSd, securityGroupClient = :sgClient, parsedOutputs = :outputs",
+            UpdateExpression: "SET #status = :status, #updatedAt = :updatedAt, cloudFormationStackName = :stackName, fsxFileSystemId = :fsxId, fsxDnsName = :fsxDns, fsxResourceArn = :fsxArn, systemDirectorInstanceId = :sdInstanceId, securityGroupSD = :sgSd, securityGroupClient = :sgClient, systemDirectorPrivateIp = :sdPrivateIp, parsedOutputs = :outputs",
             ExpressionAttributeNames: {
               "#status": "status",
               "#updatedAt": "updatedAt"
@@ -992,6 +1001,9 @@ export class StorageStack extends cdk.Stack {
               },
               ":sgClient": {
                 "S.$": "$.parsedOutputs.securityGroupClient"
+              },
+              ":sdPrivateIp": {
+                "S.$": "$.parsedOutputs.systemDirectorPrivateIp"
               },
               ":outputs": {
                 "S.$": "States.JsonToString($.parsedOutputs)"

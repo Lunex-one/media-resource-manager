@@ -1,6 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+const { EC2Client, DescribeInstancesCommand } = require('@aws-sdk/client-ec2');
+
 /**
  * Parse CloudFormation Stack Outputs Lambda
  * 
@@ -14,7 +16,7 @@
 exports.handler = async (event) => {
   console.log('ParseStackOutputs received event:', JSON.stringify(event, null, 2));
   
-  const { storageType, stackStatus } = event;
+  const { storageType, stackStatus, region } = event;
   const outputs = stackStatus?.Stacks?.[0]?.Outputs || [];
   
   // Convert outputs array to a map for easy lookup by OutputKey
@@ -42,7 +44,7 @@ exports.handler = async (event) => {
       break;
 
     case 'nexis':
-      result = parseNexisOutputs(outputMap);
+      result = await parseNexisOutputs(outputMap, region);
       break;
       
     default:
@@ -67,7 +69,8 @@ function parseFsxWindowsOutputs(outputMap) {
     // references always resolve, regardless of which storage type ran.
     systemDirectorInstanceId: 'N/A',
     securityGroupSD: 'N/A',
-    securityGroupClient: 'N/A'
+    securityGroupClient: 'N/A',
+    systemDirectorPrivateIp: 'N/A'
   };
 }
 
@@ -89,21 +92,34 @@ function parseFsxOntapOutputs(outputMap) {
     // references always resolve, regardless of which storage type ran.
     systemDirectorInstanceId: 'N/A',
     securityGroupSD: 'N/A',
-    securityGroupClient: 'N/A'
+    securityGroupClient: 'N/A',
+    systemDirectorPrivateIp: 'N/A'
   };
 }
 
 /**
- * Parse Avid NEXIS System Director outputs.
- * Resolving the System Director's private IP (needed to point a NEXIS client's
- * "remote hosts" entry at it) is deferred to the client-mounting phase, not done
- * here - matching how ONTAP's SVM DNS is resolved at mount time, not here either.
+ * Parse Avid NEXIS System Director outputs, including resolving the instance's
+ * private IP (needed to point a NEXIS client's "remote hosts" entry at it). Unlike
+ * ONTAP's SVM DNS (resolved separately at mount time since it can involve additional
+ * setup), the System Director's IP is stable once created, so it's resolved once here.
  */
-function parseNexisOutputs(outputMap) {
+async function parseNexisOutputs(outputMap, region) {
+  const instanceId = outputMap.SystemDirector;
+  let privateIp = 'N/A';
+  if (instanceId && instanceId !== 'N/A') {
+    try {
+      const ec2 = new EC2Client({ region: region || process.env.AWS_REGION });
+      const described = await ec2.send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }));
+      privateIp = described.Reservations?.[0]?.Instances?.[0]?.PrivateIpAddress || 'N/A';
+    } catch (err) {
+      console.error(`Failed to resolve private IP for System Director instance ${instanceId}:`, err);
+    }
+  }
   return {
-    systemDirectorInstanceId: outputMap.SystemDirector || 'N/A',
+    systemDirectorInstanceId: instanceId || 'N/A',
     securityGroupSD: outputMap.SecurityGroupSD || 'N/A',
     securityGroupClient: outputMap.SecurityGroupClient || 'N/A',
+    systemDirectorPrivateIp: privateIp,
     // Placeholders so the shared UpdateStatusToAvailable state's JSONPath
     // references always resolve, regardless of which storage type ran.
     fsxFileSystemId: 'N/A',
