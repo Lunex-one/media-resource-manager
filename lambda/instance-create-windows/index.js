@@ -74,7 +74,7 @@ async function generateHostname() {
 exports.handler = async (event) => {
     console.log('Creating EC2 instance:', JSON.stringify(event, null, 2));
 
-    const { amiId, instanceType, assignedUserId, domainId, retrySubnetIndex = 0, rootVolumeSize, pipelineId, acronym, region, regionalConfig } = event;
+    const { amiId, instanceType, assignedUserId, domainId, retrySubnetIndex = 0, rootVolumeSize, pipelineId, acronym, region, regionalConfig, externalRef } = event;
     
     // Determine target region and configuration
     const targetRegion = region || process.env.AWS_REGION;
@@ -202,7 +202,10 @@ exports.handler = async (event) => {
                 ...(assignedUserId ? [{ Key: 'AssignedUser', Value: assignedUserId }] : []),
                 { Key: 'ManagedBy', Value: process.env.PASCAL_CASE_NAME || 'WorkstationManager' },
                 { Key: 'Region', Value: targetRegion },
-                ...(hostname ? [{ Key: 'Hostname', Value: hostname }] : [])
+                ...(hostname ? [{ Key: 'Hostname', Value: hostname }] : []),
+                // The caller's own reference, so a machine stays findable through EC2 even if its
+                // record is lost. Omitted entirely when absent, never tagged with an empty value.
+                ...(externalRef ? [{ Key: 'ExternalRef', Value: externalRef }] : [])
             ]
         }]
     };
@@ -219,6 +222,9 @@ exports.handler = async (event) => {
             instanceId,
             // Only include assignedUserId if it has a value (DynamoDB GSI doesn't allow empty strings)
             ...(assignedUserId && { assignedUserId }),
+            // Same rule, same reason: omit rather than store '' so the attribute stays
+            // indexable, and "nobody set this" stays distinguishable from "set to nothing".
+            ...(externalRef && { externalRef }),
             amiId: effectiveAmiId,
             sourceAmiId: amiId, // Keep track of original AMI for reference
             instanceType,

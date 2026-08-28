@@ -610,7 +610,7 @@ exports.handler = async (event) => {
       const results = [];
       
       for (const workstation of workstations) {
-        const { amiId, instanceType, assignedUserId, domainId, rootVolumeSize, pipelineId, joinDomain, acronym, region } = workstation;
+        const { amiId, instanceType, assignedUserId, domainId, rootVolumeSize, pipelineId, joinDomain, acronym, region, externalRef } = workstation;
         
         // Start Step Functions execution
         const executionInput = {
@@ -622,7 +622,16 @@ exports.handler = async (event) => {
           pipelineId,
           joinDomain,
           acronym,
-          region
+          region,
+          // An opaque reference supplied by whoever asked for this workstation, carried through the
+          // state machine and written onto the record. Optional: the web console does not send one,
+          // and a request without it behaves exactly as before.
+          //
+          // It exists because creation is asynchronous. This handler answers 202 with an
+          // executionArn and no instanceId, and nothing maps one to the other afterwards - so an
+          // automated caller has no way to recognise the machine it asked for. The console does not
+          // need one because a person reads the refreshed list; a program does.
+          externalRef: externalRef || ''
         };
         
         // Generate unique execution name - handle empty assignedUserId
