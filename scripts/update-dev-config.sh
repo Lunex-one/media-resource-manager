@@ -74,9 +74,11 @@ API_URL=${API_URL%/}
 
 print_status "📡 API URL: $API_URL"
 
-# Update vite.config.ts proxy target
-sed -i "s|target: 'https://[^']*'|target: '$API_URL'|g" frontend/vite.config.ts
+# Vite reads VITE_API_URL from frontend/.env.local; the proxy target in
+# frontend/vite.config.ts is resolved from it, never patched in place. This
+# avoids the earlier hardcoded-endpoint drift and the GNU-only `sed -i`.
+echo "VITE_API_URL=$API_URL" > frontend/.env.local
 
 print_success "Development configuration updated!"
-print_success "API proxy target: $API_URL"
+print_success "API proxy target: $API_URL (frontend/.env.local)"
 print_success "Config file: frontend/public/config-dev.json"

@@ -3,8 +3,9 @@
 
 const crypto = require('crypto');
 const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
+const { CognitoJwtVerifier } = require('aws-jwt-verify');
 
-// Cache the secret to avoid repeated API calls
+// Cache the LDAP signing secret to avoid repeated API calls
 let cachedSecret = null;
 let cacheExpiry = 0;
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
@@ -25,7 +26,39 @@ async function getJwtSecret() {
     return cachedSecret;
 }
 
-// Parse LDAP JWT tokens
+// Cognito ID-token verifier. Built once at module scope so its JWKS cache
+// survives warm invocations. Requires USER_POOL_ID; CLIENT_ID is optional but
+// pins the audience when set.
+let cognitoVerifier = null;
+function getCognitoVerifier() {
+    if (cognitoVerifier) {
+        return cognitoVerifier;
+    }
+    const userPoolId = process.env.USER_POOL_ID;
+    if (!userPoolId) {
+        // Without a pool id we cannot verify a Cognito signature. Fail closed
+        // rather than trusting the token.
+        throw new Error('Cognito verification is not configured (USER_POOL_ID unset)');
+    }
+    cognitoVerifier = CognitoJwtVerifier.create({
+        userPoolId,
+        tokenUse: 'id',
+        clientId: process.env.CLIENT_ID || null, // null => audience not pinned
+    });
+    return cognitoVerifier;
+}
+
+// Constant-time comparison that also guards against length differences.
+function timingSafeEqualStr(a, b) {
+    const ba = Buffer.from(a);
+    const bb = Buffer.from(b);
+    if (ba.length !== bb.length) {
+        return false;
+    }
+    return crypto.timingSafeEqual(ba, bb);
+}
+
+// Parse and verify an LDAP (HS256) JWT
 async function parseJWT(token) {
     try {
         const secret = await getJwtSecret();
@@ -34,7 +67,7 @@ async function parseJWT(token) {
             .update(header + '.' + payload)
             .digest('base64url');
 
-        if (signature !== expectedSignature) {
+        if (!timingSafeEqualStr(signature, expectedSignature)) {
             throw new Error('Invalid signature');
         }
 
@@ -50,22 +83,11 @@ async function parseJWT(token) {
     }
 }
 
-// Validate Cognito JWT tokens
-function validateCognitoToken(token) {
+// Verify a Cognito ID token: signature (against the pool JWKS), issuer,
+// token_use, expiry, and audience when a client id is configured.
+async function validateCognitoToken(token) {
     try {
-        const [header, payload] = token.split('.');
-        const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString());
-
-        // Basic validation - check issuer and expiration
-        if (!decoded.iss || !decoded.iss.includes('cognito-idp')) {
-            throw new Error('Invalid issuer');
-        }
-
-        if (decoded.exp && decoded.exp < Math.floor(Date.now() / 1000)) {
-            throw new Error('Token expired');
-        }
-
-        return decoded;
+        return await getCognitoVerifier().verify(token);
     } catch (error) {
         throw new Error('Invalid Cognito token: ' + error.message);
     }
@@ -121,6 +143,18 @@ function isAdminUser(cognitoData) {
     return department === 'IT' || department === 'Admin';
 }
 
+// Decide which verification scheme a token claims to want, without trusting it.
+// Verification still happens in validateCognitoToken / parseJWT; this only routes.
+function looksLikeCognitoToken(token) {
+    try {
+        const [, payloadPart] = token.split('.');
+        const decoded = JSON.parse(Buffer.from(payloadPart, 'base64url').toString());
+        return typeof decoded.iss === 'string' && decoded.iss.includes('cognito-idp');
+    } catch (error) {
+        return false;
+    }
+}
+
 exports.handler = async (event) => {
     console.log('JWT Authorizer called for:', event.methodArn);
 
@@ -131,27 +165,23 @@ exports.handler = async (event) => {
         }
 
         let userData;
-        let tokenType = 'ldap';
+        let tokenType;
 
-        // Try to determine token type by checking the payload
-        try {
-            const [, payloadPart] = token.split('.');
-            const decoded = JSON.parse(Buffer.from(payloadPart, 'base64url').toString());
-
-            // Cognito tokens have 'iss' field with cognito-idp
-            if (decoded.iss && decoded.iss.includes('cognito-idp')) {
-                tokenType = 'cognito';
-                userData = validateCognitoToken(token);
-                console.log('Cognito token validated for user:', userData.email);
-            } else {
-                // LDAP token
-                userData = await parseJWT(token);
-                console.log('LDAP token validated for user:', userData.username);
-            }
-        } catch (error) {
-            // Fallback to LDAP token parsing
+        // Route by the token's claimed issuer, then verify with the matching
+        // scheme. There is deliberately no cross-scheme fallback: a token that
+        // claims to be from Cognito must pass Cognito verification and is never
+        // retried as an LDAP token. (Its RS256 signature could never match an
+        // HS256 HMAC of our secret anyway, so a fallback would only ever turn a
+        // rejection into a second failure -- or, if the branch were reordered,
+        // silently accept an unverified token.)
+        if (looksLikeCognitoToken(token)) {
+            tokenType = 'cognito';
+            userData = await validateCognitoToken(token);
+            console.log('Cognito token verified for user:', userData.email);
+        } else {
+            tokenType = 'ldap';
             userData = await parseJWT(token);
-            console.log('LDAP token validated for user:', userData.username);
+            console.log('LDAP token verified for user:', userData.username);
         }
 
         // Normalize user data format

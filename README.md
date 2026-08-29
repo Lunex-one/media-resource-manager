@@ -860,34 +860,26 @@ The application uses a **multi-stack architecture** with 18 specialized stacks:
 
 ## API Endpoints
 
-### Workstations
-- `GET /workstations` - List all
-- `POST /workstations` - Create new
-- `GET /workstations/{id}` - Get details
-- `PUT /workstations/{id}` - Update
-- `DELETE /workstations/{id}` - Delete
-- `POST /workstations/start` - Start
-- `POST /workstations/stop` - Stop
+MRM exposes a single API Gateway REST API — about 90 routes covering workstations,
+users and groups, AMIs and pipelines, the software library, storage, DataSync,
+regional hubs and Amazon DCV sessions. Every route except `POST /auth/ldap` and
+`GET /auth/validate` requires a bearer token.
 
-### Users
-- `GET /users` - List all
-- `POST /users` - Create
-- `POST /users/sync` - Sync from Identity Center
+**The complete reference is [`docs/API.md`](docs/API.md)** — base URL discovery,
+authentication, every route with request/response shapes, status codes and known
+quirks. A machine-readable OpenAPI 3 spec is at [`openapi/mrm.json`](openapi/mrm.json).
 
-### Images & Pipelines
-- `GET /images` - List AMIs
-- `POST /images/create-pipeline` - Create pipeline
-- `GET /images/pipelines` - List pipelines
+Quickest way to make an authenticated call:
 
-### Storage
-- `GET /storage` - List FSx resources
-- `POST /storage` - Create storage
+```bash
+./scripts/mrm-api.sh GET /workstations
+./scripts/mrm-api.sh POST /workstations/start '{"instanceId":"i-0abc123"}'
+```
 
-### Authentication
-- `POST /auth/ldap` - LDAP auth (returns JWT)
-- `GET /auth/validate` - Validate token
-
----
+`scripts/mrm-api.sh` resolves the endpoint from SSM/CloudFormation (via
+`scripts/mrm-env.sh`) and mints a short-lived token from the deployment's JWT
+secret. See [`docs/API.md`](docs/API.md#getting-a-token) for the LDAP and Cognito
+token paths.
 
 ## Database Schema
 
