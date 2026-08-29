@@ -5,7 +5,7 @@ const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, ScanCommand, PutCommand, UpdateCommand, DeleteCommand, QueryCommand, GetCommand } = require('@aws-sdk/lib-dynamodb');
 const { EC2Client, RunInstancesCommand, StartInstancesCommand, StopInstancesCommand, TerminateInstancesCommand, DescribeInstancesCommand, CreateTagsCommand } = require('@aws-sdk/client-ec2');
 const { SSMClient, SendCommandCommand, GetCommandInvocationCommand, GetParameterCommand, PutParameterCommand } = require('@aws-sdk/client-ssm');
-const { SFNClient, StartExecutionCommand, DescribeExecutionCommand } = require('@aws-sdk/client-sfn');
+const { SFNClient, StartExecutionCommand } = require('@aws-sdk/client-sfn');
 const { DirectoryServiceClient, DescribeDirectoriesCommand, ResetUserPasswordCommand } = require('@aws-sdk/client-directory-service');
 const { DirectoryServiceDataClient, ListGroupMembersCommand } = require('@aws-sdk/client-directory-service-data');
 const { CognitoIdentityProviderClient, ListUsersCommand } = require('@aws-sdk/client-cognito-identity-provider');
@@ -74,11 +74,6 @@ exports.handler = async (event) => {
       case 'GET':
         if (path === '/workstations') {
           return await getWorkstations(event);
-        } else if (path === '/workstations/orphans') {
-          // Before the `startsWith` below, which would otherwise read 'orphans' as an instance id.
-          return await findOrphans(event);
-        } else if (path === '/workstations/executions') {
-          return await getExecutionStatus(event);
         } else if (path.startsWith('/workstations/')) {
           return await getWorkstationDetails(path.split('/')[2], event);
         } else if (path === '/settings') {
@@ -615,7 +610,7 @@ exports.handler = async (event) => {
       const results = [];
       
       for (const workstation of workstations) {
-        const { amiId, instanceType, assignedUserId, domainId, rootVolumeSize, pipelineId, joinDomain, acronym, region, externalRef } = workstation;
+        const { amiId, instanceType, assignedUserId, domainId, rootVolumeSize, pipelineId, joinDomain, acronym, region } = workstation;
         
         // Start Step Functions execution
         const executionInput = {
@@ -627,16 +622,7 @@ exports.handler = async (event) => {
           pipelineId,
           joinDomain,
           acronym,
-          region,
-          // An opaque reference supplied by whoever asked for this workstation, carried through the
-          // state machine and written onto the record. Optional: the web console does not send one,
-          // and a request without it behaves exactly as before.
-          //
-          // It exists because creation is asynchronous. This handler answers 202 with an
-          // executionArn and no instanceId, and nothing maps one to the other afterwards - so an
-          // automated caller has no way to recognise the machine it asked for. The console does not
-          // need one because a person reads the refreshed list; a program does.
-          externalRef: externalRef || ''
+          region
         };
         
         // Generate unique execution name - handle empty assignedUserId
@@ -873,154 +859,6 @@ exports.handler = async (event) => {
         statusCode: 200,
         headers: { 'Content-Type': 'application/json', ...corsHeaders },
         body: JSON.stringify({ browserSessionsEnabled: true })
-      };
-    }
-  }
-
-  async function getExecutionStatus(event) {
-    // Report the state of one workstation-creation execution. POST /workstations answers 202 with
-    // an executionArn and no instanceId, and nothing here stores that ARN — so a caller that kept
-    // it has, until now, had no way to ask what became of the work.
-    //
-    // What this settles is when to stop waiting. RUNNING means the build is still going, and a
-    // caller can wait with certainty instead of inventing a timeout; a terminal status means it is
-    // over. What it does NOT settle is whether an instance leaked: the id enters the execution
-    // history only when the create function returns, and in the window that leaks one it never
-    // does. GET /workstations/orphans is what answers that.
-    //
-    // The ARN arrives as a query parameter rather than a path segment because it contains colons
-    // and slashes, and path-encoding one is a nuisance for every client.
-    const executionArn = event.queryStringParameters?.executionArn;
-    if (!executionArn) {
-      return {
-        statusCode: 400,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
-        body: JSON.stringify({ error: 'executionArn query parameter is required' })
-      };
-    }
-
-    try {
-      const result = await sfn.send(new DescribeExecutionCommand({ executionArn }));
-
-      return {
-        statusCode: 200,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
-        body: JSON.stringify({
-          executionArn,
-          name: result.name,
-          status: result.status,
-          startDate: result.startDate,
-          stopDate: result.stopDate || null,
-          // The output only exists once the execution has succeeded, and it is a JSON string.
-          // Parsed here so a caller does not have to know that; left null when it cannot be read,
-          // because a malformed output must not fail a status question.
-          output: parseExecutionOutput(result.output)
-        })
-      };
-    } catch (error) {
-      // Step Functions retains a Standard execution's history for 90 days and then forgets it, so
-      // ExecutionDoesNotExist is an ordinary answer about an old build rather than a fault. It is
-      // reported as 404 so a caller can tell it from a refusal.
-      if (error.name === 'ExecutionDoesNotExist' || error.name === 'InvalidArn') {
-        return {
-          statusCode: 404,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders },
-          body: JSON.stringify({
-            error: 'No such execution. Step Functions keeps a completed execution for 90 days.',
-            executionArn
-          })
-        };
-      }
-      console.error('Error describing execution:', error);
-      return {
-        statusCode: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
-        body: JSON.stringify({ error: 'Failed to describe execution' })
-      };
-    }
-  }
-
-  function parseExecutionOutput(output) {
-    if (!output) return null;
-    try {
-      return JSON.parse(output);
-    } catch (error) {
-      console.warn('Execution output was not JSON:', error.message);
-      return null;
-    }
-  }
-
-  async function findOrphans(event) {
-    // Find instances carrying a caller's ExternalRef tag, and say which of them MRM has no record
-    // of. An orphan is the failure this endpoint exists for: `instance-create-*` calls
-    // RunInstances and writes its DynamoDB record ~30 lines later, so anything that kills the
-    // function in between leaves a running instance that GET /workstations can never show — it
-    // scans the table, and there is no row. The instance is still tagged, because tags are set on
-    // the RunInstances call itself and are therefore atomic with the instance.
-    //
-    // Without this, an automated caller cannot tell "my build failed and made nothing" from "my
-    // build failed and left something running", and retrying the second case creates a duplicate
-    // that bills until somebody notices.
-    const externalRef = event.queryStringParameters?.externalRef;
-    if (!externalRef) {
-      return {
-        statusCode: 400,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
-        body: JSON.stringify({ error: 'externalRef query parameter is required' })
-      };
-    }
-
-    // Regional hubs place instances outside this Lambda's own region, so a caller that built into
-    // one has to say where to look. Defaults to the primary region's client.
-    const region = event.queryStringParameters?.region;
-    const client = region ? new EC2Client({ region }) : ec2;
-
-    try {
-      const result = await client.send(new DescribeInstancesCommand({
-        Filters: [
-          { Name: 'tag:ExternalRef', Values: [externalRef] },
-          // Terminated instances are excluded deliberately. One is evidence that a build happened
-          // and is not something a caller can adopt or must clean up, so reporting it would turn
-          // "safe to build again" into a false alarm.
-          { Name: 'instance-state-name', Values: ['pending', 'running', 'shutting-down', 'stopping', 'stopped'] }
-        ]
-      }));
-
-      const instances = (result.Reservations || []).flatMap(r => r.Instances || []);
-
-      const orphans = [];
-      const tracked = [];
-      for (const instance of instances) {
-        const known = await dynamodb.send(new GetCommand({
-          TableName: process.env.WORKSTATION_TABLE_NAME,
-          Key: { instanceId: instance.InstanceId }
-        }));
-        const summary = {
-          instanceId: instance.InstanceId,
-          state: instance.State?.Name,
-          instanceType: instance.InstanceType,
-          launchTime: instance.LaunchTime,
-          availabilityZone: instance.Placement?.AvailabilityZone,
-          privateIpAddress: instance.PrivateIpAddress || null
-        };
-        if (known.Item) {
-          tracked.push(summary.instanceId);
-        } else {
-          orphans.push(summary);
-        }
-      }
-
-      return {
-        statusCode: 200,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
-        body: JSON.stringify({ externalRef, region: region || process.env.AWS_REGION, orphans, tracked })
-      };
-    } catch (error) {
-      console.error('Error searching for orphaned instances:', error);
-      return {
-        statusCode: 500,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
-        body: JSON.stringify({ error: 'Failed to search for orphaned instances' })
       };
     }
   }

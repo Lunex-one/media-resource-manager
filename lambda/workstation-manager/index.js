@@ -4,7 +4,7 @@
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, ScanCommand, PutCommand, UpdateCommand, DeleteCommand, GetCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
 const { EC2Client, TerminateInstancesCommand, DescribeInstancesCommand, StopInstancesCommand, RebootInstancesCommand, ModifyInstanceAttributeCommand, DescribeVolumesCommand, DescribeImagesCommand, CreateTagsCommand } = require('@aws-sdk/client-ec2');
-const { SFNClient, StartExecutionCommand } = require('@aws-sdk/client-sfn');
+const { SFNClient, StartExecutionCommand, DescribeExecutionCommand } = require('@aws-sdk/client-sfn');
 const { SSMClient, GetParameterCommand } = require('@aws-sdk/client-ssm');
 const { DirectoryServiceClient, DescribeDirectoriesCommand } = require('@aws-sdk/client-directory-service');
 const { DirectoryServiceDataClient, ListGroupMembersCommand } = require('@aws-sdk/client-directory-service-data');
@@ -247,6 +247,11 @@ exports.handler = async (event) => {
       case 'GET':
         if (path === '/workstations') {
           return await getWorkstations(event);
+        } else if (path === '/workstations/orphans') {
+          // Before the `startsWith` below, which would otherwise read 'orphans' as an instance id.
+          return await findOrphans(event);
+        } else if (path === '/workstations/executions') {
+          return await getExecutionStatus(event);
         } else if (path.startsWith('/workstations/')) {
           return await getWorkstationDetails(path.split('/')[2], event);
         }
@@ -849,7 +854,7 @@ async function getWorkstationDetails(instanceId, event) {
 }
 
 async function createWorkstation(data) {
-  const { amiId, instanceType, assignedUserId, domainId, rootVolumeSize, pipelineId, acronym, joinDomain, platform, region } = data;
+  const { amiId, instanceType, assignedUserId, domainId, rootVolumeSize, pipelineId, acronym, joinDomain, platform, region, externalRef } = data;
   
   // Default joinDomain to true for backward compatibility (only applies to Windows)
   const shouldJoinDomain = joinDomain !== false;
@@ -1037,6 +1042,11 @@ async function createWorkstation(data) {
       joinDomain: platformLower === 'windows' ? shouldJoinDomain : false, // Only Windows supports domain join
       platform: detectedPlatform,
       region: targetRegion,
+      // An opaque reference supplied by whoever asked for this workstation, carried through
+      // the state machine and written onto the record - see instance-create-*/index.js and
+      // GET /workstations/orphans for why this exists (creation is asynchronous, and this
+      // is what lets an automated caller recognize the machine it asked for).
+      ...(externalRef && { externalRef }),
       // Include regional config for satellite regions
       ...(regionalConfig && {
         regionalConfig: {
@@ -1549,4 +1559,141 @@ async function invokeVolumeManager(path, data) {
     headers: { 'Content-Type': 'application/json', ...corsHeaders },
     body: JSON.stringify({ message: messages[action] || 'Volume operation initiated.' })
   };
+}
+
+async function getExecutionStatus(event) {
+  // Report the state of one workstation-creation execution. POST /workstations answers 200
+  // with an executionArn and no instanceId if the caller supplied no externalRef, and nothing
+  // stores that ARN elsewhere - so a caller that kept it has, until now, had no way to ask
+  // what became of the work.
+  //
+  // RUNNING means the build is still going, so a caller can wait with certainty instead of
+  // inventing a timeout; a terminal status means it is over. This does NOT settle whether an
+  // instance leaked: the instance id enters the execution history only when the create
+  // function returns, and the window that leaks one is precisely the window where it never
+  // does. GET /workstations/orphans is what answers that.
+  const executionArn = event.queryStringParameters?.executionArn;
+  if (!executionArn) {
+    return {
+      statusCode: 400,
+      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+      body: JSON.stringify({ error: 'executionArn query parameter is required' })
+    };
+  }
+
+  try {
+    const result = await sfnClient.send(new DescribeExecutionCommand({ executionArn }));
+
+    return {
+      statusCode: 200,
+      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+      body: JSON.stringify({
+        executionArn,
+        name: result.name,
+        status: result.status,
+        startDate: result.startDate,
+        stopDate: result.stopDate || null,
+        output: parseExecutionOutput(result.output)
+      })
+    };
+  } catch (error) {
+    // Step Functions retains a Standard execution's history for 90 days and then forgets it,
+    // so ExecutionDoesNotExist is an ordinary answer about an old build, not a fault.
+    if (error.name === 'ExecutionDoesNotExist' || error.name === 'InvalidArn') {
+      return {
+        statusCode: 404,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        body: JSON.stringify({
+          error: 'No such execution. Step Functions keeps a completed execution for 90 days.',
+          executionArn
+        })
+      };
+    }
+    console.error('Error describing execution:', error);
+    return {
+      statusCode: 500,
+      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+      body: JSON.stringify({ error: 'Failed to describe execution' })
+    };
+  }
+}
+
+function parseExecutionOutput(output) {
+  if (!output) return null;
+  try {
+    return JSON.parse(output);
+  } catch (error) {
+    console.warn('Execution output was not JSON:', error.message);
+    return null;
+  }
+}
+
+async function findOrphans(event) {
+  // Find instances carrying a caller's ExternalRef tag, and say which of them MRM has no
+  // record of. instance-create-*/index.js calls RunInstances and writes its DynamoDB record
+  // afterwards, so anything that kills the function in between leaves a running instance
+  // GET /workstations can never show, because that endpoint scans the table and there is no
+  // row. The instance is still tagged, since tags are set on the RunInstances call itself and
+  // are therefore atomic with the instance in a way the record is not.
+  const externalRef = event.queryStringParameters?.externalRef;
+  if (!externalRef) {
+    return {
+      statusCode: 400,
+      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+      body: JSON.stringify({ error: 'externalRef query parameter is required' })
+    };
+  }
+
+  // Regional hubs place instances outside this Lambda's own region, so a caller that built
+  // into one has to say where to look. Defaults to the primary region's client.
+  const region = event.queryStringParameters?.region;
+  const client = region ? new EC2Client({ region }) : ec2Client;
+
+  try {
+    const result = await client.send(new DescribeInstancesCommand({
+      Filters: [
+        { Name: 'tag:ExternalRef', Values: [externalRef] },
+        // Terminated instances are excluded deliberately - one is evidence a build happened,
+        // not something a caller can adopt or must clean up.
+        { Name: 'instance-state-name', Values: ['pending', 'running', 'shutting-down', 'stopping', 'stopped'] }
+      ]
+    }));
+
+    const instances = (result.Reservations || []).flatMap(r => r.Instances || []);
+
+    const orphans = [];
+    const tracked = [];
+    for (const instance of instances) {
+      const known = await dynamodb.send(new GetCommand({
+        TableName: process.env.WORKSTATION_TABLE_NAME,
+        Key: { instanceId: instance.InstanceId }
+      }));
+      const summary = {
+        instanceId: instance.InstanceId,
+        state: instance.State?.Name,
+        instanceType: instance.InstanceType,
+        launchTime: instance.LaunchTime,
+        availabilityZone: instance.Placement?.AvailabilityZone,
+        privateIpAddress: instance.PrivateIpAddress || null
+      };
+      if (known.Item) {
+        tracked.push(summary.instanceId);
+      } else {
+        orphans.push(summary);
+      }
+    }
+
+    return {
+      statusCode: 200,
+      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+      body: JSON.stringify({ externalRef, region: region || process.env.AWS_REGION, orphans, tracked })
+    };
+  } catch (error) {
+    console.error('Error searching for orphaned instances:', error);
+    return {
+      statusCode: 500,
+      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+      body: JSON.stringify({ error: 'Failed to search for orphaned instances' })
+    };
+  }
 }
