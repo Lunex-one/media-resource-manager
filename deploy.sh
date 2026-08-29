@@ -347,37 +347,35 @@ ACRONYM=$(node -p "require('./cdk.json').context.productName.split(' ').map(word
 # Get CloudFront URL
 CLOUDFRONT_URL=$(aws cloudformation describe-stacks --stack-name ${ACRONYM}-Frontend --query 'Stacks[0].Outputs[?OutputKey==`WebsiteUrl`].OutputValue' --output text 2>/dev/null || echo "Not available")
 
-# Get API Gateway URL
-API_URL=$(aws cloudformation describe-stacks --stack-name ${ACRONYM}-WorkstationMain --query 'Stacks[0].Outputs[?OutputKey==`ApiUrl`].OutputValue' --output text 2>/dev/null || echo "Not available")
+# Get API Gateway URL from the API stack. The stack is ${ACRONYM}-Api, not
+# ${ACRONYM}-WorkstationMain (which does not exist). ACRONYM is defined just
+# above; do not reuse API_STACK_NAME from the CORS block, which is computed
+# before ACRONYM is set.
+API_URL=$(aws cloudformation describe-stacks --stack-name "${ACRONYM}-Api" --query 'Stacks[0].Outputs[?OutputKey==`ApiUrl`].OutputValue' --output text 2>/dev/null)
+if [[ -z "$API_URL" || "$API_URL" == "None" ]]; then
+    print_warning "Could not read ApiUrl from ${ACRONYM}-Api. Skipping dev config generation."
+    print_warning "Verify the API stack deployed and your AWS region matches the deployment."
+    API_URL=""
+fi
 
 # Generate config-dev.json for local development
 print_status "📝 Generating development configuration..."
 
-cat > frontend/public/config-dev.json << EOF
+if [[ -n "$API_URL" ]]; then
+    cat > frontend/public/config-dev.json << EOF
 {
   "apiUrl": "$API_URL",
   "productName": "$PRODUCT_DISPLAY_NAME"
 }
 EOF
 
-# Update .env.local for Vite development server
-if [[ "$API_URL" != "Not available" ]]; then
+    # Vite reads VITE_API_URL from frontend/.env.local (see frontend/vite.config.ts).
+    # The dev-server proxy target is resolved from this value, never hardcoded.
     print_status "🔧 Updating Vite development configuration..."
-    echo "VITE_API_URL=$API_URL" > frontend/.env.local
-    print_success "Vite configuration updated with API URL: $API_URL"
-fi
-
-if [[ -f "frontend/public/config-dev.json" ]]; then
-    print_success "Development configuration generated at frontend/public/config-dev.json"
+    echo "VITE_API_URL=${API_URL%/}" > frontend/.env.local
+    print_success "Development configuration generated (API URL: ${API_URL%/})"
 else
-    print_warning "Failed to generate development configuration"
-fi
-
-# Update vite.config.ts with current API URL for development proxy
-if [[ "$API_URL" != "Not available" ]]; then
-    API_URL_CLEAN=${API_URL%/}  # Remove trailing slash
-    sed -i "s|target: 'https://[^']*'|target: '$API_URL_CLEAN'|g" frontend/vite.config.ts
-    print_success "Updated vite.config.ts with API URL: $API_URL_CLEAN"
+    print_warning "Skipped config-dev.json and .env.local — no API URL available."
 fi
 
 echo ""

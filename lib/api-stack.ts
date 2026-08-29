@@ -1144,7 +1144,12 @@ export class ApiStack extends cdk.Stack {
       environmentEncryption: props.dataEncryptionKey,
       environment: {
         JWT_SECRET_ARN: jwtSecret.secretArn,
-        ADMIN_GROUP_NAME: ssm.StringParameter.valueForStringParameter(this, `/${props.pascalCaseName}/Auth/AdminGroupName`)
+        ADMIN_GROUP_NAME: ssm.StringParameter.valueForStringParameter(this, `/${props.pascalCaseName}/Auth/AdminGroupName`),
+        // Cognito ID tokens are verified against the pool JWKS (RS256). Without
+        // the pool id the authorizer fails Cognito tokens closed rather than
+        // trusting them. CLIENT_ID pins the audience when set.
+        USER_POOL_ID: ssm.StringParameter.valueForStringParameter(this, `/${props.pascalCaseName}/Auth/UserPoolId`),
+        CLIENT_ID: ssm.StringParameter.valueForStringParameter(this, `/${props.pascalCaseName}/Auth/UserPoolClientId`)
       },
       timeout: cdk.Duration.seconds(10),
       reservedConcurrentExecutions: 25,

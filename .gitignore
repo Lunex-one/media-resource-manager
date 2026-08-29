@@ -168,3 +168,8 @@ software-library/utilities/microsoft-office-*
 software-library/utilities/microsoft-365-*
 software-library/utilities/teams-*
 software-library/utilities/slack-*
+
+# Raw API Gateway export -- contains the live endpoint. Regenerate with
+# `python3 openapi/build.py`; only the merged openapi/mrm.json is committed.
+openapi/generated/
+

@@ -248,20 +248,25 @@ if (-not $acronym) { $acronym = "MRM" }
 $cloudfrontUrl = aws cloudformation describe-stacks --stack-name "$acronym-Frontend" --query 'Stacks[0].Outputs[?OutputKey==`WebsiteUrl`].OutputValue' --output text 2>$null
 if (-not $cloudfrontUrl) { $cloudfrontUrl = "Not available" }
 
-$apiUrl = aws cloudformation describe-stacks --stack-name "$acronym-WorkstationMain" --query 'Stacks[0].Outputs[?OutputKey==`ApiUrl`].OutputValue' --output text 2>$null
-if (-not $apiUrl) { $apiUrl = "Not available" }
+# The API stack is $acronym-Api, not $acronym-WorkstationMain (which does not exist).
+$apiUrl = aws cloudformation describe-stacks --stack-name "$acronym-Api" --query 'Stacks[0].Outputs[?OutputKey==`ApiUrl`].OutputValue' --output text 2>$null
 
 # Generate config-dev.json for local development
 Write-Status "Generating development configuration..."
-@"
+if ($apiUrl -and $apiUrl -ne "None") {
+    @"
 {
   "apiUrl": "$apiUrl",
   "productName": "$productDisplayName"
 }
 "@ | Set-Content "frontend/public/config-dev.json" -Encoding UTF8
 
-if (Test-Path "frontend/public/config-dev.json") {
-    Write-Ok "Development configuration generated at frontend/public/config-dev.json"
+    # Vite reads VITE_API_URL from frontend/.env.local (see frontend/vite.config.ts).
+    "VITE_API_URL=$($apiUrl.TrimEnd('/'))" | Set-Content "frontend/.env.local" -Encoding UTF8
+    Write-Ok "Development configuration generated (API URL: $($apiUrl.TrimEnd('/')))"
+} else {
+    Write-Warn "Could not read ApiUrl from $acronym-Api. Skipping dev config generation."
+    $apiUrl = "Not available"
 }
 
 # Populate software library

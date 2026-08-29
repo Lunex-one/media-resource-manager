@@ -1,0 +1,3520 @@
+{
+  "info": {
+    "title": "Media Resource Manager API",
+    "version": "1.0.3",
+    "description": "Self-service management API for MRM cloud workstations: EC2 workstation lifecycle, users and groups, AMIs and Image Builder pipelines, the software library, FSx/S3 storage, DataSync, regional hubs and Amazon DCV sessions.\n\nAll routes except `POST /auth/ldap` and `GET /auth/validate` require a bearer token. See `docs/API.md` for how to obtain one.\n\nGenerated from the deployed API by `openapi/build.py`; schemas are maintained by hand in `openapi/overlay.json`.",
+    "license": {
+      "name": "Apache-2.0",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://{restApiId}.execute-api.{region}.amazonaws.com/{basePath}",
+      "description": "Resolve restApiId and region from SSM /{PascalCaseName}/Workstation/ApiUrl, or run `. scripts/mrm-env.sh` and read $MRM_API_URL.",
+      "variables": {
+        "restApiId": {
+          "default": "REPLACE_WITH_YOUR_API_ID",
+          "description": "The deployment's API Gateway REST API id."
+        },
+        "region": {
+          "default": "us-east-1"
+        },
+        "basePath": {
+          "default": "prod",
+          "enum": [
+            "prod"
+          ]
+        }
+      }
+    }
+  ],
+  "securitySchemes": {
+    "bearerAuth": {
+      "type": "http",
+      "scheme": "bearer",
+      "bearerFormat": "JWT",
+      "description": "A custom Lambda authorizer validates the token. It accepts an HS256 token signed with the deployment's JWT secret, or a Cognito RS256 ID token."
+    }
+  },
+  "tags": [
+    {
+      "name": "Auth",
+      "description": "Token issuance and password management."
+    },
+    {
+      "name": "Workstations",
+      "description": "Workstation lifecycle and volumes."
+    },
+    {
+      "name": "Settings",
+      "description": "Deployment settings and instance type catalog."
+    },
+    {
+      "name": "Users and groups",
+      "description": "User and group administration."
+    },
+    {
+      "name": "Images and pipelines",
+      "description": "AMIs and EC2 Image Builder pipelines."
+    },
+    {
+      "name": "Software library",
+      "description": "Installable software catalog."
+    },
+    {
+      "name": "Storage",
+      "description": "FSx and Mountpoint-S3 resources."
+    },
+    {
+      "name": "DataSync",
+      "description": "Data transfer locations, tasks and executions."
+    },
+    {
+      "name": "Regional hubs",
+      "description": "Satellite DCV deployments in other regions."
+    },
+    {
+      "name": "DCV",
+      "description": "Amazon DCV session management."
+    },
+    {
+      "name": "Progress",
+      "description": "Workstation start-up progress events."
+    }
+  ],
+  "schemas": {
+    "Error": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "string"
+        }
+      },
+      "description": "Standard handler error shape."
+    },
+    "AuthorizerError": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      },
+      "description": "Emitted by the Lambda authorizer itself, which uses `message` rather than `error`."
+    },
+    "LdapLoginRequest": {
+      "type": "object",
+      "required": [
+        "username",
+        "password"
+      ],
+      "properties": {
+        "username": {
+          "type": "string"
+        },
+        "password": {
+          "type": "string",
+          "format": "password"
+        }
+      }
+    },
+    "LdapLoginResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string"
+        },
+        "username": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string",
+          "description": "HS256 JWT, valid for one hour."
+        }
+      }
+    },
+    "ChangePasswordRequest": {
+      "type": "object",
+      "required": [
+        "username",
+        "currentPassword",
+        "newPassword"
+      ],
+      "properties": {
+        "username": {
+          "type": "string"
+        },
+        "currentPassword": {
+          "type": "string",
+          "format": "password"
+        },
+        "newPassword": {
+          "type": "string",
+          "format": "password"
+        }
+      }
+    },
+    "Workstation": {
+      "type": "object",
+      "properties": {
+        "instanceId": {
+          "type": "string"
+        },
+        "hostname": {
+          "type": "string"
+        },
+        "workstationName": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "Windows",
+            "Linux",
+            "macOS"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "description": "Workflow status, e.g. Running, Stopped, starting-instance."
+        },
+        "instanceStatus": {
+          "type": "string",
+          "description": "Raw EC2 instance state."
+        },
+        "dcvStatus": {
+          "type": "string"
+        },
+        "dcvSessionId": {
+          "type": "string",
+          "nullable": true
+        },
+        "sessionState": {
+          "type": "string"
+        },
+        "connectionCount": {
+          "type": "integer"
+        },
+        "assignedUserId": {
+          "type": "string"
+        },
+        "amiId": {
+          "type": "string"
+        },
+        "sourceAmiId": {
+          "type": "string"
+        },
+        "subnetId": {
+          "type": "string"
+        },
+        "privateIpAddress": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "instanceStartTime": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "CreateWorkstationRequest": {
+      "type": "object",
+      "required": [
+        "amiId",
+        "instanceType"
+      ],
+      "properties": {
+        "amiId": {
+          "type": "string",
+          "pattern": "^ami-[a-f0-9]{8,17}$"
+        },
+        "instanceType": {
+          "type": "string"
+        },
+        "assignedUserId": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "Windows",
+            "Linux",
+            "macOS"
+          ]
+        },
+        "rootVolumeSize": {
+          "type": "integer"
+        },
+        "domainId": {
+          "type": "string"
+        },
+        "joinDomain": {
+          "type": "boolean",
+          "default": true,
+          "description": "Windows only."
+        },
+        "pipelineId": {
+          "type": "string"
+        },
+        "acronym": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string",
+          "description": "Target a satellite regional hub. Unknown region returns 400."
+        }
+      }
+    },
+    "CreateWorkstationBatchRequest": {
+      "type": "object",
+      "required": [
+        "workstations"
+      ],
+      "properties": {
+        "workstations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/CreateWorkstationRequest"
+          }
+        }
+      }
+    },
+    "InstanceIdRequest": {
+      "type": "object",
+      "required": [
+        "instanceId"
+      ],
+      "properties": {
+        "instanceId": {
+          "type": "string"
+        }
+      }
+    },
+    "ChangeInstanceTypeRequest": {
+      "type": "object",
+      "required": [
+        "instanceId",
+        "instanceType"
+      ],
+      "properties": {
+        "instanceId": {
+          "type": "string"
+        },
+        "instanceType": {
+          "type": "string"
+        }
+      }
+    },
+    "AddVolumeRequest": {
+      "type": "object",
+      "required": [
+        "instanceId",
+        "size"
+      ],
+      "properties": {
+        "instanceId": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "description": "GiB."
+        },
+        "volumeType": {
+          "type": "string",
+          "default": "gp3"
+        },
+        "deviceName": {
+          "type": "string"
+        }
+      }
+    },
+    "ResizeVolumeRequest": {
+      "type": "object",
+      "required": [
+        "instanceId",
+        "volumeId",
+        "newSize"
+      ],
+      "properties": {
+        "instanceId": {
+          "type": "string"
+        },
+        "volumeId": {
+          "type": "string"
+        },
+        "newSize": {
+          "type": "integer"
+        }
+      }
+    },
+    "DetachVolumeRequest": {
+      "type": "object",
+      "required": [
+        "instanceId",
+        "volumeId"
+      ],
+      "properties": {
+        "instanceId": {
+          "type": "string"
+        },
+        "volumeId": {
+          "type": "string"
+        },
+        "deleteVolume": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "KeepAliveRequest": {
+      "type": "object",
+      "required": [
+        "instanceId",
+        "durationHours"
+      ],
+      "properties": {
+        "instanceId": {
+          "type": "string"
+        },
+        "durationHours": {
+          "type": "number"
+        }
+      }
+    },
+    "StartExecutionResponse": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "executionArn": {
+          "type": "string"
+        }
+      }
+    },
+    "AcceptedResponse": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      },
+      "description": "The work continues asynchronously; poll the resource for the result."
+    },
+    "Settings": {
+      "type": "object",
+      "properties": {
+        "disconnectedDuration": {
+          "type": "integer"
+        },
+        "browserSessionsEnabled": {
+          "type": "boolean"
+        },
+        "keepAliveEnabled": {
+          "type": "boolean"
+        },
+        "keepAliveMaxHours": {
+          "type": "integer"
+        },
+        "autoStartEnabled": {
+          "type": "boolean"
+        },
+        "autoStartLeadTimeMinutes": {
+          "type": "integer"
+        }
+      },
+      "description": "Non-admin callers receive only autoStartLeadTimeMinutes."
+    },
+    "AllowedInstanceTypes": {
+      "type": "object",
+      "properties": {
+        "windows": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "linux": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "macos": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "User": {
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string",
+          "format": "email"
+        },
+        "firstName": {
+          "type": "string"
+        },
+        "lastName": {
+          "type": "string"
+        },
+        "department": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "isAdmin": {
+          "type": "boolean"
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "preferences": {
+          "type": "object"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "CreateUserRequest": {
+      "type": "object",
+      "required": [
+        "email"
+      ],
+      "properties": {
+        "firstName": {
+          "type": "string"
+        },
+        "lastName": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string",
+          "format": "email"
+        },
+        "department": {
+          "type": "string"
+        },
+        "isAdmin": {
+          "type": "boolean"
+        },
+        "temporaryPassword": {
+          "type": "string",
+          "format": "password"
+        }
+      }
+    },
+    "AssignUsersToGroupsRequest": {
+      "type": "object",
+      "required": [
+        "userIds",
+        "groupIds"
+      ],
+      "properties": {
+        "userIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "groupIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "RemoveFromGroupsRequest": {
+      "type": "object",
+      "required": [
+        "action",
+        "userId"
+      ],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "removeFromGroups"
+          ]
+        },
+        "userId": {
+          "type": "string"
+        },
+        "groupIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "UserIdsRequest": {
+      "type": "object",
+      "required": [
+        "userIds"
+      ],
+      "properties": {
+        "userIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "SyncUsersRequest": {
+      "type": "object",
+      "properties": {
+        "groupIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "identityStoreId": {
+          "type": "string"
+        }
+      }
+    },
+    "Group": {
+      "type": "object",
+      "properties": {
+        "groupId": {
+          "type": "string"
+        },
+        "groupName": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "GroupRequest": {
+      "type": "object",
+      "required": [
+        "groupName"
+      ],
+      "properties": {
+        "groupName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "UserSchedule": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "timezone": {
+          "type": "string",
+          "example": "Europe/Berlin"
+        },
+        "schedule": {
+          "type": "object",
+          "description": "Per-day start/stop windows."
+        }
+      }
+    },
+    "Image": {
+      "type": "object",
+      "properties": {
+        "amiId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "architecture": {
+          "type": "string"
+        },
+        "virtualizationType": {
+          "type": "string"
+        },
+        "pipelineId": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "sourceRegion": {
+          "type": "string"
+        },
+        "isAutoGenerated": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "CreateImageRequest": {
+      "type": "object",
+      "required": [
+        "amiId",
+        "name"
+      ],
+      "properties": {
+        "amiId": {
+          "type": "string",
+          "pattern": "^ami-[a-f0-9]{8,17}$"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        }
+      }
+    },
+    "CopyImageRequest": {
+      "type": "object",
+      "required": [
+        "sourceAmiId",
+        "targetRegions"
+      ],
+      "properties": {
+        "sourceAmiId": {
+          "type": "string"
+        },
+        "sourceRegion": {
+          "type": "string"
+        },
+        "targetRegions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "pipelineId": {
+          "type": "string"
+        }
+      }
+    },
+    "CreatePipelineRequest": {
+      "type": "object",
+      "required": [
+        "name",
+        "baseImageId",
+        "platform"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "baseImageId": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "instanceType": {
+          "type": "string"
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "Pipeline": {
+      "type": "object",
+      "properties": {
+        "pipelineId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "baseImageId": {
+          "type": "string"
+        },
+        "instanceType": {
+          "type": "string"
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "SoftwareItem": {
+      "type": "object",
+      "properties": {
+        "softwareId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "versionNumber": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "sourceType": {
+          "type": "string"
+        },
+        "componentArn": {
+          "type": "string"
+        },
+        "componentVersion": {
+          "type": "string"
+        },
+        "mediaS3Uri": {
+          "type": "string"
+        },
+        "mediaFileName": {
+          "type": "string"
+        },
+        "gpuRequired": {
+          "type": "boolean"
+        },
+        "estimatedInstallTime": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "SoftwareList": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/SoftwareItem"
+          }
+        }
+      }
+    },
+    "UploadUrlRequest": {
+      "type": "object",
+      "required": [
+        "softwareId",
+        "fileName"
+      ],
+      "properties": {
+        "softwareId": {
+          "type": "string"
+        },
+        "fileName": {
+          "type": "string"
+        },
+        "contentType": {
+          "type": "string",
+          "default": "application/octet-stream"
+        }
+      }
+    },
+    "UploadUrlResponse": {
+      "type": "object",
+      "properties": {
+        "uploadUrl": {
+          "type": "string",
+          "description": "Presigned S3 PUT, valid for one hour."
+        },
+        "s3Uri": {
+          "type": "string"
+        },
+        "s3Key": {
+          "type": "string"
+        }
+      }
+    },
+    "GenerateScriptRequest": {
+      "type": "object",
+      "required": [
+        "softwareName",
+        "platform"
+      ],
+      "properties": {
+        "softwareName": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "Windows",
+            "Linux"
+          ]
+        },
+        "mediaS3Uri": {
+          "type": "string"
+        },
+        "licenseKey": {
+          "type": "string"
+        },
+        "testAutomatically": {
+          "type": "boolean"
+        },
+        "maxAttempts": {
+          "type": "integer"
+        },
+        "timeoutMinutes": {
+          "type": "integer"
+        },
+        "userRequirements": {
+          "type": "string"
+        }
+      }
+    },
+    "GenerateScriptResponse": {
+      "type": "object",
+      "properties": {
+        "executionId": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "progressUrl": {
+          "type": "string"
+        }
+      }
+    },
+    "CancelGenerationRequest": {
+      "type": "object",
+      "required": [
+        "executionId"
+      ],
+      "properties": {
+        "executionId": {
+          "type": "string"
+        }
+      }
+    },
+    "ChatRequest": {
+      "type": "object",
+      "required": [
+        "message"
+      ],
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "conversationHistory": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "softwareName": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "mediaS3Uri": {
+          "type": "string"
+        }
+      }
+    },
+    "UsageLimitError": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "limitType": {
+          "type": "string"
+        },
+        "currentUsage": {
+          "type": "number"
+        },
+        "limit": {
+          "type": "number"
+        }
+      }
+    },
+    "StorageResource": {
+      "type": "object",
+      "properties": {
+        "storageId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "fsx-windows",
+            "fsx-ontap",
+            "mountpoint-s3"
+          ]
+        },
+        "status": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "configuration": {
+          "type": "object"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "CreateStorageRequest": {
+      "type": "object",
+      "required": [
+        "name",
+        "configuration"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "fsx-windows",
+            "fsx-ontap",
+            "mountpoint-s3"
+          ],
+          "default": "fsx-windows"
+        },
+        "description": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "configuration": {
+          "type": "object",
+          "description": "Type-specific; see docs/API.md."
+        }
+      }
+    },
+    "StorageEnvelope": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "data": {
+          "$ref": "#/components/schemas/StorageResource"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "description": "Storage handlers wrap their result in a success envelope."
+    },
+    "MountRequest": {
+      "type": "object",
+      "required": [
+        "action",
+        "instanceId",
+        "storageId"
+      ],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "mount",
+            "unmount"
+          ]
+        },
+        "instanceId": {
+          "type": "string"
+        },
+        "storageId": {
+          "type": "string"
+        }
+      }
+    },
+    "S3Bucket": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "arn": {
+          "type": "string"
+        },
+        "creationDate": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "StorageConfig": {
+      "type": "object",
+      "properties": {
+        "workstationRoleArn": {
+          "type": "string"
+        },
+        "accountId": {
+          "type": "string"
+        }
+      }
+    },
+    "TaskOptions": {
+      "type": "object",
+      "properties": {
+        "transferMode": {
+          "type": "string",
+          "enum": [
+            "CHANGED",
+            "ALL"
+          ]
+        },
+        "verifyMode": {
+          "type": "string",
+          "enum": [
+            "ONLY_FILES_TRANSFERRED",
+            "POINT_IN_TIME_CONSISTENT",
+            "NONE"
+          ]
+        },
+        "overwriteMode": {
+          "type": "string",
+          "enum": [
+            "ALWAYS",
+            "NEVER"
+          ]
+        },
+        "preserveDeletedFiles": {
+          "type": "string",
+          "enum": [
+            "PRESERVE",
+            "REMOVE"
+          ]
+        },
+        "bytesPerSecond": {
+          "type": "integer"
+        },
+        "logLevel": {
+          "type": "string",
+          "enum": [
+            "OFF",
+            "BASIC",
+            "TRANSFER"
+          ]
+        }
+      }
+    },
+    "DataSyncLocation": {
+      "type": "object",
+      "properties": {
+        "locationId": {
+          "type": "string"
+        },
+        "locationArn": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "locationType": {
+          "type": "string",
+          "enum": [
+            "S3",
+            "FSX_ONTAP",
+            "FSX_WINDOWS"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "available",
+            "creating",
+            "deleting",
+            "error"
+          ]
+        },
+        "bucketArn": {
+          "type": "string"
+        },
+        "isCrossAccount": {
+          "type": "boolean"
+        },
+        "subdirectory": {
+          "type": "string"
+        },
+        "storageId": {
+          "type": "string"
+        },
+        "fsxFileSystemArn": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "CreateLocationRequest": {
+      "type": "object",
+      "required": [
+        "name",
+        "type"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "S3",
+            "FSX_ONTAP",
+            "FSX_WINDOWS"
+          ]
+        },
+        "s3Config": {
+          "type": "object",
+          "required": [
+            "bucketArn",
+            "isCrossAccount"
+          ],
+          "properties": {
+            "bucketArn": {
+              "type": "string"
+            },
+            "subdirectory": {
+              "type": "string"
+            },
+            "isCrossAccount": {
+              "type": "boolean"
+            }
+          }
+        },
+        "fsxConfig": {
+          "type": "object",
+          "required": [
+            "storageId"
+          ],
+          "properties": {
+            "storageId": {
+              "type": "string"
+            },
+            "subdirectory": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "DataSyncTask": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "taskArn": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "available",
+            "creating",
+            "running",
+            "deleting",
+            "error",
+            "invalid"
+          ]
+        },
+        "sourceLocationId": {
+          "type": "string"
+        },
+        "sourceLocationArn": {
+          "type": "string"
+        },
+        "destinationLocationId": {
+          "type": "string"
+        },
+        "destinationLocationArn": {
+          "type": "string"
+        },
+        "options": {
+          "$ref": "#/components/schemas/TaskOptions"
+        },
+        "lastExecutionId": {
+          "type": "string"
+        },
+        "lastExecutionStatus": {
+          "type": "string"
+        },
+        "lastExecutionTime": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "CreateTaskRequest": {
+      "type": "object",
+      "required": [
+        "name",
+        "sourceLocationId",
+        "destinationLocationId"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "sourceLocationId": {
+          "type": "string"
+        },
+        "destinationLocationId": {
+          "type": "string"
+        },
+        "options": {
+          "$ref": "#/components/schemas/TaskOptions"
+        }
+      }
+    },
+    "UpdateTaskRequest": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "options": {
+          "$ref": "#/components/schemas/TaskOptions"
+        }
+      }
+    },
+    "TaskExecution": {
+      "type": "object",
+      "properties": {
+        "executionId": {
+          "type": "string"
+        },
+        "executionArn": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "QUEUED",
+            "LAUNCHING",
+            "PREPARING",
+            "TRANSFERRING",
+            "VERIFYING",
+            "SUCCESS",
+            "ERROR"
+          ]
+        },
+        "startTime": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "endTime": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "bytesTransferred": {
+          "type": "integer"
+        },
+        "filesTransferred": {
+          "type": "integer"
+        },
+        "duration": {
+          "type": "integer"
+        },
+        "errorCode": {
+          "type": "string"
+        },
+        "errorMessage": {
+          "type": "string"
+        }
+      }
+    },
+    "RegionalHub": {
+      "type": "object",
+      "properties": {
+        "region": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "vpcCidr": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "availabilityZones": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "enableWindows": {
+          "type": "boolean"
+        },
+        "enableLinux": {
+          "type": "boolean"
+        },
+        "enableMacOS": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "CreateRegionalHubRequest": {
+      "type": "object",
+      "required": [
+        "region",
+        "displayName",
+        "vpcCidr",
+        "availabilityZones"
+      ],
+      "properties": {
+        "region": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "vpcCidr": {
+          "type": "string",
+          "pattern": "^(\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2}$"
+        },
+        "availabilityZones": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 2
+        },
+        "publicSubnetMask": {
+          "type": "integer",
+          "default": 28
+        },
+        "privateSubnetMask": {
+          "type": "integer",
+          "default": 24
+        },
+        "dcvDomainName": {
+          "type": "string"
+        },
+        "dcvCertificateArn": {
+          "type": "string"
+        },
+        "enableWindows": {
+          "type": "boolean",
+          "default": true
+        },
+        "enableLinux": {
+          "type": "boolean",
+          "default": true
+        },
+        "enableMacOS": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "DcvRequest": {
+      "type": "object",
+      "required": [
+        "action"
+      ],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "describe-servers",
+            "describe-sessions",
+            "create-session",
+            "delete-session",
+            "get-connection-data",
+            "get-load-balancers",
+            "get-autoscaling-groups",
+            "get-workstation-assignments",
+            "get-instance-states"
+          ]
+        },
+        "serverId": {
+          "type": "string",
+          "description": "EC2 instance id of the workstation."
+        },
+        "sessionName": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "dcvSessionId": {
+          "type": "string"
+        },
+        "sessionType": {
+          "type": "string",
+          "default": "console"
+        },
+        "owner": {
+          "type": "string"
+        }
+      },
+      "description": "Single RPC endpoint; the action field selects the operation."
+    },
+    "ProgressResponse": {
+      "type": "object",
+      "properties": {
+        "instanceId": {
+          "type": "string"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "timestamp": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "stage": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "progress": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "lastUpdated": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "description": "Only events from the most recent start run are returned."
+    }
+  },
+  "responses": {
+    "Unauthorized": {
+      "description": "Missing, malformed or expired token.",
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "#/components/schemas/AuthorizerError"
+          }
+        }
+      }
+    },
+    "ServerError": {
+      "description": "Handler error.",
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "#/components/schemas/Error"
+          }
+        }
+      }
+    },
+    "BadRequest": {
+      "description": "Missing or invalid fields.",
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "#/components/schemas/Error"
+          }
+        }
+      }
+    },
+    "Forbidden": {
+      "description": "Authenticated, but not permitted (usually admin-only).",
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "#/components/schemas/Error"
+          }
+        }
+      }
+    },
+    "NotFound": {
+      "description": "Resource not found, or the path/method fell through the handler's router.",
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "#/components/schemas/Error"
+          }
+        }
+      }
+    }
+  },
+  "operations": {
+    "POST /auth/ldap": {
+      "summary": "Authenticate against Active Directory",
+      "description": "Public. Returns an HS256 JWT valid for one hour.",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/LdapLoginRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Authenticated.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LdapLoginResponse"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
+        },
+        "401": {
+          "description": "Invalid credentials.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        }
+      }
+    },
+    "GET /auth/validate": {
+      "summary": "Validate a token (not usable as built)",
+      "description": "Reads the token from an `auth-token` cookie that no client sets, so this always returns 401. See docs/API.md#known-quirks.",
+      "responses": {
+        "200": {
+          "description": "Token is valid."
+        },
+        "401": {
+          "description": "No or invalid token.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /change-password": {
+      "summary": "Change a directory password",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ChangePasswordRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Password changed."
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
+        }
+      }
+    },
+    "GET /workstations": {
+      "summary": "List workstations",
+      "description": "Admins see every workstation; other callers see only those assigned to them or to a group they belong to.",
+      "responses": {
+        "200": {
+          "description": "Workstations.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Workstation"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /workstations": {
+      "summary": "Create one or more workstations",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/CreateWorkstationRequest"
+                },
+                {
+                  "$ref": "#/components/schemas/CreateWorkstationBatchRequest"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Created.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Workstation"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
+        }
+      }
+    },
+    "GET /workstations/{id}": {
+      "summary": "Get a workstation",
+      "responses": {
+        "200": {
+          "description": "Workstation.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Workstation"
+              }
+            }
+          }
+        },
+        "404": {
+          "$ref": "#/components/responses/NotFound"
+        }
+      }
+    },
+    "PUT /workstations/{id}": {
+      "summary": "Update a workstation",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Workstation"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Updated.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Workstation"
+              }
+            }
+          }
+        }
+      }
+    },
+    "DELETE /workstations/{id}": {
+      "summary": "Terminate a workstation",
+      "responses": {
+        "200": {
+          "description": "Termination started."
+        }
+      }
+    },
+    "POST /workstations/start": {
+      "summary": "Start a workstation",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/InstanceIdRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Start workflow started.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartExecutionResponse"
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /workstations/stop": {
+      "summary": "Stop a workstation",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/InstanceIdRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Stopping."
+        }
+      }
+    },
+    "POST /workstations/reboot": {
+      "summary": "Reboot a workstation",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/InstanceIdRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Rebooting."
+        }
+      }
+    },
+    "POST /workstations/change-instance-type": {
+      "summary": "Change the EC2 instance type",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ChangeInstanceTypeRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Changed."
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
+        },
+        "404": {
+          "$ref": "#/components/responses/NotFound"
+        }
+      }
+    },
+    "POST /workstations/volumes/add": {
+      "summary": "Attach a new EBS volume",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AddVolumeRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "202": {
+          "description": "Accepted.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptedResponse"
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /workstations/volumes/resize": {
+      "summary": "Resize an EBS volume",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ResizeVolumeRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "202": {
+          "description": "Accepted.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptedResponse"
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /workstations/volumes/detach": {
+      "summary": "Detach an EBS volume",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DetachVolumeRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "202": {
+          "description": "Accepted.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptedResponse"
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /workstations/keep-alive": {
+      "summary": "Suppress auto-shutdown for a period",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/KeepAliveRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Keep-alive set."
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
+        },
+        "403": {
+          "description": "Feature disabled and caller is not an admin.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        }
+      }
+    },
+    "DELETE /workstations/{id}/keep-alive": {
+      "summary": "Cancel keep-alive",
+      "responses": {
+        "200": {
+          "description": "Cancelled."
+        }
+      }
+    },
+    "GET /settings": {
+      "summary": "Get settings",
+      "description": "Non-admins receive only autoStartLeadTimeMinutes.",
+      "responses": {
+        "200": {
+          "description": "Settings.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Settings"
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /settings": {
+      "summary": "Save settings (admin)",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Settings"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Saved."
+        },
+        "403": {
+          "$ref": "#/components/responses/Forbidden"
+        }
+      }
+    },
+    "GET /settings/instance-types": {
+      "summary": "Get allowed instance types",
+      "responses": {
+        "200": {
+          "description": "Allowed types.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AllowedInstanceTypes"
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /settings/instance-types": {
+      "summary": "Set allowed instance types (admin)",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AllowedInstanceTypes"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Saved."
+        },
+        "403": {
+          "$ref": "#/components/responses/Forbidden"
+        }
+      }
+    },
+    "GET /instance-types/catalog": {
+      "summary": "Get the EC2 instance type catalog",
+      "responses": {
+        "200": {
+          "description": "Catalog."
+        }
+      }
+    },
+    "GET /domains": {
+      "summary": "List joinable Active Directory domains",
+      "responses": {
+        "200": {
+          "description": "Domains."
+        }
+      }
+    },
+    "GET /users": {
+      "summary": "List users",
+      "responses": {
+        "200": {
+          "description": "Users.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /users": {
+      "summary": "Create a user, or assign/remove group membership",
+      "description": "Dispatches on the body shape: {userIds, groupIds} assigns, {action:'removeFromGroups', userId} removes, anything else creates.",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/AssignUsersToGroupsRequest"
+                },
+                {
+                  "$ref": "#/components/schemas/RemoveFromGroupsRequest"
+                },
+                {
+                  "$ref": "#/components/schemas/CreateUserRequest"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Done."
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
+        },
+        "403": {
+          "description": "User creation is disabled in Cognito auth mode.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        }
+      }
+    },
+    "GET /users/{id}": {
+      "summary": "Get user details",
+      "responses": {
+        "200": {
+          "description": "User.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/User"
+              }
+            }
+          }
+        },
+        "404": {
+          "$ref": "#/components/responses/NotFound"
+        }
+      }
+    },
+    "POST /users/enable": {
+      "summary": "Enable users",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/UserIdsRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Enabled."
+        },
+        "403": {
+          "$ref": "#/components/responses/Forbidden"
+        }
+      }
+    },
+    "POST /users/disable": {
+      "summary": "Disable users",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/UserIdsRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Disabled."
+        },
+        "403": {
+          "$ref": "#/components/responses/Forbidden"
+        }
+      }
+    },
+    "POST /users/delete": {
+      "summary": "Delete users",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/UserIdsRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Deleted."
+        },
+        "403": {
+          "$ref": "#/components/responses/Forbidden"
+        }
+      }
+    },
+    "POST /users/sync": {
+      "summary": "Sync users from IAM Identity Center",
+      "requestBody": {
+        "required": false,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SyncUsersRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Synced."
+        }
+      }
+    },
+    "GET /users/{id}/schedule": {
+      "summary": "Get a user's auto-start schedule",
+      "responses": {
+        "200": {
+          "description": "Schedule.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserSchedule"
+              }
+            }
+          }
+        }
+      }
+    },
+    "PUT /users/{id}/schedule": {
+      "summary": "Set a user's auto-start schedule (admin)",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/UserSchedule"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Saved."
+        },
+        "403": {
+          "$ref": "#/components/responses/Forbidden"
+        }
+      }
+    },
+    "DELETE /users/{id}/schedule": {
+      "summary": "Delete a user's schedule (admin)",
+      "responses": {
+        "200": {
+          "description": "Deleted."
+        },
+        "403": {
+          "$ref": "#/components/responses/Forbidden"
+        }
+      }
+    },
+    "GET /groups": {
+      "summary": "List groups",
+      "parameters": [
+        {
+          "name": "userId",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "description": "Return only this user's groups."
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "Groups.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Group"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /groups": {
+      "summary": "Create a group",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/GroupRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Created.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Group"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
+        }
+      }
+    },
+    "GET /groups/{groupId}": {
+      "summary": "Get a group",
+      "responses": {
+        "200": {
+          "description": "Group.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Group"
+              }
+            }
+          }
+        },
+        "404": {
+          "$ref": "#/components/responses/NotFound"
+        }
+      }
+    },
+    "PUT /groups/{groupId}": {
+      "summary": "Update a group",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/GroupRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Updated.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Group"
+              }
+            }
+          }
+        }
+      }
+    },
+    "DELETE /groups/{groupId}": {
+      "summary": "Delete a group",
+      "responses": {
+        "200": {
+          "description": "Deleted."
+        }
+      }
+    },
+    "GET /images": {
+      "summary": "List registered AMIs",
+      "responses": {
+        "200": {
+          "description": "Images.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Image"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /images": {
+      "summary": "Register an AMI",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CreateImageRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Registered.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Image"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
+        }
+      }
+    },
+    "PUT /images/{id}": {
+      "summary": "Update an image",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Image"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Updated.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Image"
+              }
+            }
+          }
+        }
+      }
+    },
+    "DELETE /images/{id}": {
+      "summary": "Deregister an image",
+      "responses": {
+        "200": {
+          "description": "Deleted."
+        }
+      }
+    },
+    "POST /images/copy": {
+      "summary": "Copy an AMI to other regions",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CopyImageRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Copy started."
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
+        }
+      }
+    },
+    "POST /images/create-pipeline": {
+      "summary": "Create an Image Builder pipeline",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CreatePipelineRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Created.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Pipeline"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
+        }
+      }
+    },
+    "GET /images/pipelines": {
+      "summary": "List pipelines",
+      "responses": {
+        "200": {
+          "description": "Pipelines.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Pipeline"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "PUT /images/pipelines/{pipelineId}": {
+      "summary": "Update a pipeline",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CreatePipelineRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Updated.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Pipeline"
+              }
+            }
+          }
+        }
+      }
+    },
+    "DELETE /images/pipelines/{pipelineId}": {
+      "summary": "Delete a pipeline",
+      "responses": {
+        "200": {
+          "description": "Deleted."
+        }
+      }
+    },
+    "POST /images/pipelines/{pipelineId}/execute": {
+      "summary": "Run a pipeline",
+      "responses": {
+        "200": {
+          "description": "Build started."
+        }
+      }
+    },
+    "GET /images/pipelines/{pipelineId}/status": {
+      "summary": "Get pipeline build status",
+      "responses": {
+        "200": {
+          "description": "Status."
+        }
+      }
+    },
+    "GET /images/software": {
+      "summary": "List software library items",
+      "responses": {
+        "200": {
+          "description": "Items.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SoftwareList"
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /images/software": {
+      "summary": "Add a software item",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SoftwareItem"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Created.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SoftwareItem"
+              }
+            }
+          }
+        }
+      }
+    },
+    "GET /images/software/{softwareId}": {
+      "summary": "Get a software item",
+      "responses": {
+        "200": {
+          "description": "Item.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SoftwareItem"
+              }
+            }
+          }
+        },
+        "404": {
+          "$ref": "#/components/responses/NotFound"
+        }
+      }
+    },
+    "PUT /images/software/{softwareId}": {
+      "summary": "Update a software item",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/SoftwareItem"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Updated.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SoftwareItem"
+              }
+            }
+          }
+        }
+      }
+    },
+    "DELETE /images/software/{softwareId}": {
+      "summary": "Delete a software item",
+      "responses": {
+        "200": {
+          "description": "Deleted."
+        }
+      }
+    },
+    "POST /images/software/upload-url": {
+      "summary": "Get a presigned S3 upload URL",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/UploadUrlRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Presigned URL, valid one hour.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadUrlResponse"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
+        }
+      }
+    },
+    "POST /images/software/{softwareId}/generate-script": {
+      "summary": "Generate an install script with the AI agent",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/GenerateScriptRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "202": {
+          "description": "Generation started.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateScriptResponse"
+              }
+            }
+          }
+        },
+        "429": {
+          "description": "Usage limit reached.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageLimitError"
+              }
+            }
+          }
+        },
+        "503": {
+          "description": "Agent disabled (EnableBedrockFeatures=false).",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        }
+      }
+    },
+    "GET /images/software/{softwareId}/generation-progress": {
+      "summary": "Stream generation progress (SSE)",
+      "parameters": [
+        {
+          "name": "executionId",
+          "in": "query",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "Server-sent event stream.",
+          "content": {
+            "text/event-stream": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
+        }
+      }
+    },
+    "POST /images/software/{softwareId}/cancel-generation": {
+      "summary": "Cancel a generation run",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CancelGenerationRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Cancelled."
+        }
+      }
+    },
+    "POST /images/software/generate-script-draft": {
+      "summary": "Generate a script for unsaved software",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/GenerateScriptRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "202": {
+          "description": "Generation started.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateScriptResponse"
+              }
+            }
+          }
+        },
+        "429": {
+          "description": "Usage limit reached.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageLimitError"
+              }
+            }
+          }
+        },
+        "503": {
+          "description": "Agent disabled.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        }
+      }
+    },
+    "GET /images/software/generation-progress-draft": {
+      "summary": "Stream draft generation progress (SSE)",
+      "parameters": [
+        {
+          "name": "executionId",
+          "in": "query",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "Server-sent event stream.",
+          "content": {
+            "text/event-stream": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
+        }
+      }
+    },
+    "POST /images/software/cancel-generation": {
+      "summary": "Cancel a draft generation run",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CancelGenerationRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Cancelled."
+        }
+      }
+    },
+    "POST /images/software/chat": {
+      "summary": "Chat with the install-script agent",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ChatRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Reply."
+        },
+        "503": {
+          "description": "Agent disabled.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        }
+      }
+    },
+    "GET /storage": {
+      "summary": "List storage resources",
+      "responses": {
+        "200": {
+          "description": "Storage resources.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/StorageResource"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /storage": {
+      "summary": "Provision a storage resource",
+      "description": "Returns 201 once accepted; provisioning continues in a nested CloudFormation stack. Poll GET /storage/{storageId}.",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CreateStorageRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "201": {
+          "description": "Accepted.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageEnvelope"
+              }
+            }
+          }
+        },
+        "400": {
+          "description": "Name and configuration are required.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageEnvelope"
+              }
+            }
+          }
+        }
+      }
+    },
+    "GET /storage/{storageId}": {
+      "summary": "Get a storage resource",
+      "responses": {
+        "200": {
+          "description": "Storage resource.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageResource"
+              }
+            }
+          }
+        },
+        "404": {
+          "$ref": "#/components/responses/NotFound"
+        }
+      }
+    },
+    "PUT /storage/{storageId}": {
+      "summary": "Update a storage resource",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/StorageResource"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Updated.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageEnvelope"
+              }
+            }
+          }
+        }
+      }
+    },
+    "DELETE /storage/{storageId}": {
+      "summary": "Delete a storage resource",
+      "responses": {
+        "200": {
+          "description": "Deletion started.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageEnvelope"
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /storage/mount": {
+      "summary": "Mount or unmount a Mountpoint-S3 volume",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/MountRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Done."
+        }
+      }
+    },
+    "POST /storage/nfs-mount": {
+      "summary": "Mount or unmount an FSx ONTAP NFS export",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/MountRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Done."
+        }
+      }
+    },
+    "GET /storage/s3-buckets": {
+      "summary": "List S3 buckets usable for Mountpoint-S3",
+      "responses": {
+        "200": {
+          "description": "Buckets.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/S3Bucket"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "GET /storage/config": {
+      "summary": "Get the workstation role ARN and account id",
+      "description": "Used to build cross-account bucket policies.",
+      "responses": {
+        "200": {
+          "description": "Config.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageConfig"
+              }
+            }
+          }
+        }
+      }
+    },
+    "GET /datasync/locations": {
+      "summary": "List DataSync locations",
+      "responses": {
+        "200": {
+          "description": "Locations.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DataSyncLocation"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /datasync/locations": {
+      "summary": "Create a DataSync location",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CreateLocationRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Created.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DataSyncLocation"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
+        }
+      }
+    },
+    "DELETE /datasync/locations/{locationId}": {
+      "summary": "Delete a DataSync location",
+      "responses": {
+        "200": {
+          "description": "Deleted."
+        }
+      }
+    },
+    "GET /datasync/tasks": {
+      "summary": "List DataSync tasks",
+      "responses": {
+        "200": {
+          "description": "Tasks.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DataSyncTask"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /datasync/tasks": {
+      "summary": "Create a DataSync task",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CreateTaskRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Created.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DataSyncTask"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
+        }
+      }
+    },
+    "PUT /datasync/tasks/{taskId}": {
+      "summary": "Update a DataSync task",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/UpdateTaskRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Updated.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DataSyncTask"
+              }
+            }
+          }
+        }
+      }
+    },
+    "DELETE /datasync/tasks/{taskId}": {
+      "summary": "Delete a DataSync task",
+      "responses": {
+        "200": {
+          "description": "Deleted."
+        }
+      }
+    },
+    "POST /datasync/tasks/{taskId}/execute": {
+      "summary": "Start a task execution",
+      "responses": {
+        "200": {
+          "description": "Execution started.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskExecution"
+              }
+            }
+          }
+        }
+      }
+    },
+    "GET /datasync/tasks/{taskId}/executions": {
+      "summary": "List task executions",
+      "responses": {
+        "200": {
+          "description": "Executions.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TaskExecution"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "GET /datasync/s3-buckets": {
+      "summary": "List S3 buckets usable as DataSync locations",
+      "responses": {
+        "200": {
+          "description": "Buckets.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/S3Bucket"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "GET /datasync/config": {
+      "summary": "Get DataSync configuration",
+      "responses": {
+        "200": {
+          "description": "Config."
+        }
+      }
+    },
+    "GET /regions": {
+      "summary": "List regional hubs",
+      "responses": {
+        "200": {
+          "description": "Hubs.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/RegionalHub"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /regions": {
+      "summary": "Create a regional hub",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CreateRegionalHubRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Creation started.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegionalHub"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
+        }
+      }
+    },
+    "GET /regions/{region}": {
+      "summary": "Get a regional hub",
+      "responses": {
+        "200": {
+          "description": "Hub.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegionalHub"
+              }
+            }
+          }
+        },
+        "404": {
+          "$ref": "#/components/responses/NotFound"
+        }
+      }
+    },
+    "PUT /regions/{region}": {
+      "summary": "Update a regional hub",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CreateRegionalHubRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Updated.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegionalHub"
+              }
+            }
+          }
+        }
+      }
+    },
+    "DELETE /regions/{region}": {
+      "summary": "Delete a regional hub",
+      "responses": {
+        "200": {
+          "description": "Deletion started."
+        }
+      }
+    },
+    "GET /regions/{region}/availability-zones": {
+      "summary": "List AZs in a region",
+      "responses": {
+        "200": {
+          "description": "Availability zones."
+        }
+      }
+    },
+    "POST /dcv": {
+      "summary": "DCV session manager RPC",
+      "description": "One endpoint for nine actions; see docs/API.md#dcv. Requests naming a workstation in another region are forwarded to that region's Lambda.",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DcvRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Action result."
+        },
+        "500": {
+          "description": "Handler or regional routing error.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Error"
+              }
+            }
+          }
+        }
+      }
+    },
+    "GET /progress": {
+      "summary": "Get workstation start progress",
+      "parameters": [
+        {
+          "name": "instanceId",
+          "in": "query",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "Progress events.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProgressResponse"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "#/components/responses/BadRequest"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "jwt-authorizer",
+  "version": "1.0.0",
+  "description": "API Gateway Lambda authorizer for MRM. Verifies LDAP (HS256) and Cognito (RS256) tokens.",
+  "main": "index.js",
+  "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.0.0",
+    "aws-jwt-verify": "^4.0.1"
+  }
+}
