@@ -219,6 +219,25 @@ export class ApiStack extends cdk.Stack {
       ],
     }));
 
+    // Reading an execution back, for GET /workstations/executions.
+    //
+    // A separate statement because the resource is different in kind: `states:DescribeExecution` is
+    // authorized against an *execution* ARN — `arn:…:execution:<machine>:<execution>` — and a state
+    // machine ARN never matches one, so it cannot join the grant above.
+    //
+    // Scoped by name rather than listed: all four workstation state machines are named
+    // `<acronym>-workstation-…`, so one pattern covers every execution of them and nothing else in
+    // the account.
+    lambdaRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'states:DescribeExecution',
+      ],
+      resources: [
+        `arn:aws:states:${this.region}:${this.account}:execution:${props.acronym.toLowerCase()}-workstation-*:*`,
+      ],
+    }));
+
     // Grant IAM PassRole permission for workstation instance role
     lambdaRole.addToPolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
@@ -1273,6 +1292,15 @@ export class ApiStack extends cdk.Stack {
 
     const changeInstanceTypeResource = workstationsResource.addResource('change-instance-type');
     changeInstanceTypeResource.addMethod('POST', workstationIntegration, { authorizer });
+
+    // Declared as its own resource rather than left to the `{id}` path parameter below. Both would
+    // reach the same Lambda, and API Gateway prefers an exact match - but relying on that makes the
+    // route invisible in this file, which is the one place the API's shape is written down.
+    const orphansResource = workstationsResource.addResource('orphans');
+    orphansResource.addMethod('GET', workstationIntegration, { authorizer });
+
+    const workstationExecutionsResource = workstationsResource.addResource('executions');
+    workstationExecutionsResource.addMethod('GET', workstationIntegration, { authorizer });
 
     // Volume management routes — invoked asynchronously via workstation-manager
     // (durable functions with >15min timeout cannot be invoked synchronously)

@@ -74,7 +74,7 @@ async function generateHostname() {
 exports.handler = async (event) => {
     console.log('Creating Linux EC2 instance:', JSON.stringify(event, null, 2));
 
-    const { amiId, instanceType, assignedUserId, retrySubnetIndex = 0, rootVolumeSize, pipelineId, region, regionalConfig } = event;
+    const { amiId, instanceType, assignedUserId, retrySubnetIndex = 0, rootVolumeSize, pipelineId, region, regionalConfig, externalRef } = event;
     
     // Determine target region and configuration
     const targetRegion = region || process.env.AWS_REGION;
@@ -228,7 +228,10 @@ fi
                     { Key: 'ManagedBy', Value: process.env.PASCAL_CASE_NAME || 'WorkstationManager' },
                     { Key: 'Platform', Value: 'Linux' },
                     { Key: 'Region', Value: targetRegion },
-                    ...(hostname ? [{ Key: 'Hostname', Value: hostname }] : [])
+                    ...(hostname ? [{ Key: 'Hostname', Value: hostname }] : []),
+                    // The caller's own reference, so a machine stays findable through EC2 even if its
+                    // record is lost. Omitted entirely when absent, never tagged with an empty value.
+                    ...(externalRef ? [{ Key: 'ExternalRef', Value: externalRef }] : [])
                 ]
             }]
         }));
@@ -242,6 +245,9 @@ fi
                 instanceId,
                 // Only include assignedUserId if it has a value (DynamoDB GSI doesn't allow empty strings)
                 ...(assignedUserId && { assignedUserId }),
+                // Same rule, same reason: omit rather than store '' so the attribute stays
+                // indexable, and "nobody set this" stays distinguishable from "set to nothing".
+                ...(externalRef && { externalRef }),
                 amiId: effectiveAmiId, 
                 sourceAmiId: amiId, // Keep track of original AMI
                 instanceType, workstationName,
