@@ -40,6 +40,10 @@ export interface ImageManagementStackProps extends cdk.StackProps {
   lambdaEnvironment: Record<string, string>;
   api: apigateway.RestApi;
   authorizer: apigateway.IAuthorizer;
+  invokeInstallScriptAgentFunction?: lambda.IFunction;
+  installScriptProgressFunction?: lambda.IFunction;
+  cancelInstallScriptFunction?: lambda.IFunction;
+  chatRequirementsFunction?: lambda.IFunction;
 }
 
 export class ImageManagementStack extends cdk.Stack {
@@ -164,5 +168,44 @@ export class ImageManagementStack extends cdk.Stack {
     softwareIdResource.addMethod('GET', softwareLibraryIntegration, { authorizer });
     softwareIdResource.addMethod('PUT', softwareLibraryIntegration, { authorizer });
     softwareIdResource.addMethod('DELETE', softwareLibraryIntegration, { authorizer });
+
+    // Install Script Agent endpoints (only if agent functions are available)
+    if (props.invokeInstallScriptAgentFunction && props.installScriptProgressFunction && props.cancelInstallScriptFunction) {
+      const invokeAgentIntegration = new apigateway.LambdaIntegration(props.invokeInstallScriptAgentFunction);
+      const progressIntegration = new apigateway.LambdaIntegration(props.installScriptProgressFunction);
+      const cancelIntegration = new apigateway.LambdaIntegration(props.cancelInstallScriptFunction);
+
+      // POST /images/software/{softwareId}/generate-script
+      const generateScriptResource = softwareIdResource.addResource('generate-script');
+      generateScriptResource.addMethod('POST', invokeAgentIntegration, { authorizer });
+
+      // GET /images/software/{softwareId}/generation-progress (SSE)
+      const generationProgressResource = softwareIdResource.addResource('generation-progress');
+      generationProgressResource.addMethod('GET', progressIntegration, { authorizer });
+
+      // POST /images/software/{softwareId}/cancel-generation
+      const cancelGenerationResource = softwareIdResource.addResource('cancel-generation');
+      cancelGenerationResource.addMethod('POST', cancelIntegration, { authorizer });
+
+      // Draft script generation endpoints (no softwareId required)
+      // POST /images/software/generate-script-draft
+      const generateScriptDraftResource = softwareResource.addResource('generate-script-draft');
+      generateScriptDraftResource.addMethod('POST', invokeAgentIntegration, { authorizer });
+
+      // GET /images/software/generation-progress-draft
+      const generationProgressDraftResource = softwareResource.addResource('generation-progress-draft');
+      generationProgressDraftResource.addMethod('GET', progressIntegration, { authorizer });
+
+      // POST /images/software/cancel-generation - Cancel draft generation by executionId
+      const cancelGenerationDraftResource = softwareResource.addResource('cancel-generation');
+      cancelGenerationDraftResource.addMethod('POST', cancelIntegration, { authorizer });
+    }
+
+    // Chat Requirements endpoint (only when Bedrock features are enabled)
+    if (props.chatRequirementsFunction) {
+      const chatRequirementsIntegration = new apigateway.LambdaIntegration(props.chatRequirementsFunction);
+      const chatResource = softwareResource.addResource('chat');
+      chatResource.addMethod('POST', chatRequirementsIntegration, { authorizer });
+    }
   }
 }

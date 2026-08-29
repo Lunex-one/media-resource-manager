@@ -444,6 +444,10 @@ const imageManagementStack = new ImageManagementStack(app, `${naming.acronym}-Im
   lambdaEnvironment: apiStack.lambdaEnvironment,
   api: apiStack.api,
   authorizer: apiStack.authorizer,
+  invokeInstallScriptAgentFunction: apiStack.invokeInstallScriptAgentFunction,
+  installScriptProgressFunction: apiStack.installScriptProgressFunction,
+  cancelInstallScriptFunction: apiStack.cancelInstallScriptFunction,
+  chatRequirementsFunction: apiStack.chatRequirementsFunction,
 });
 imageManagementStack.addDependency(apiStack);
 

@@ -70,6 +70,10 @@ export class ApiStack extends cdk.Stack {
   public readonly authorizer: apigateway.IAuthorizer;
   public readonly lambdaRole: iam.Role;
   public readonly lambdaEnvironment: Record<string, string>;
+  public readonly invokeInstallScriptAgentFunction?: lambda.Function;
+  public readonly installScriptProgressFunction?: lambda.Function;
+  public readonly cancelInstallScriptFunction?: lambda.Function;
+  public readonly chatRequirementsFunction?: lambda.Function;
 
   constructor(scope: Construct, id: string, props: ApiStackProps) {
     super(scope, id, {
@@ -651,6 +655,11 @@ export class ApiStack extends cdk.Stack {
         ],
       }));
     }
+
+    this.invokeInstallScriptAgentFunction = invokeInstallScriptAgentFunction;
+    this.installScriptProgressFunction = installScriptProgressFunction;
+    this.cancelInstallScriptFunction = cancelInstallScriptFunction;
+    this.chatRequirementsFunction = chatRequirementsFunction;
 
     // FSx SMB Mount Manager Lambda function (Windows)
     // Note: Keep construct ID as 'FsxMountManagerFunction' to preserve CloudFormation logical ID
@@ -1316,47 +1325,9 @@ export class ApiStack extends cdk.Stack {
     const changePasswordIntegration = new apigateway.LambdaIntegration(changePasswordFunction);
     changePasswordResource.addMethod('POST', changePasswordIntegration, { authorizer });
 
-    // Images endpoints - now using dedicated function
-    // /images/* routes now live in ImageManagementStack
-
-    // Install Script Agent endpoints (only if agent functions are available)
-    if (invokeInstallScriptAgentFunction && installScriptProgressFunction && cancelInstallScriptFunction) {
-      const invokeAgentIntegration = new apigateway.LambdaIntegration(invokeInstallScriptAgentFunction);
-      const progressIntegration = new apigateway.LambdaIntegration(installScriptProgressFunction);
-      const cancelIntegration = new apigateway.LambdaIntegration(cancelInstallScriptFunction);
-
-      // POST /images/software/{softwareId}/generate-script
-      const generateScriptResource = softwareIdResource.addResource('generate-script');
-      generateScriptResource.addMethod('POST', invokeAgentIntegration, { authorizer });
-
-      // GET /images/software/{softwareId}/generation-progress (SSE)
-      const generationProgressResource = softwareIdResource.addResource('generation-progress');
-      generationProgressResource.addMethod('GET', progressIntegration, { authorizer });
-
-      // POST /images/software/{softwareId}/cancel-generation
-      const cancelGenerationResource = softwareIdResource.addResource('cancel-generation');
-      cancelGenerationResource.addMethod('POST', cancelIntegration, { authorizer });
-
-      // Draft script generation endpoints (no softwareId required)
-      // POST /images/software/generate-script-draft
-      const generateScriptDraftResource = softwareResource.addResource('generate-script-draft');
-      generateScriptDraftResource.addMethod('POST', invokeAgentIntegration, { authorizer });
-
-      // GET /images/software/generation-progress-draft
-      const generationProgressDraftResource = softwareResource.addResource('generation-progress-draft');
-      generationProgressDraftResource.addMethod('GET', progressIntegration, { authorizer });
-
-      // POST /images/software/cancel-generation - Cancel draft generation by executionId
-      const cancelGenerationDraftResource = softwareResource.addResource('cancel-generation');
-      cancelGenerationDraftResource.addMethod('POST', cancelIntegration, { authorizer });
-    }
-
-    // Chat Requirements endpoint (only when Bedrock features are enabled)
-    if (chatRequirementsFunction) {
-      const chatRequirementsIntegration = new apigateway.LambdaIntegration(chatRequirementsFunction);
-      const chatResource = softwareResource.addResource('chat');
-      chatResource.addMethod('POST', chatRequirementsIntegration, { authorizer });
-    }
+    // Images endpoints, install-script-agent endpoints, and chat requirements endpoint
+    // all now live in ImageManagementStack (they attach onto softwareResource /
+    // softwareIdResource, which moved there with the rest of /images/*).
 
     // Storage endpoints
     storageResource.addMethod('GET', listStorageIntegration, { authorizer });
