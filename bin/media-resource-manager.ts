@@ -440,7 +440,6 @@ const imageManagementStack = new ImageManagementStack(app, `${naming.acronym}-Im
   imageBuilderUploadsBucket: infrastructureStack.imageBuilder.uploadsBucket.bucketName,
   buildSubnetId: infrastructureStack.network.privateSubnets[0].subnetId,
   buildSecurityGroupId: infrastructureStack.imageBuilder.buildSecurityGroup.securityGroupId,
-  lambdaRole: apiStack.lambdaRole,
   lambdaEnvironment: apiStack.lambdaEnvironment,
   api: apiStack.api,
   authorizer: apiStack.authorizer,

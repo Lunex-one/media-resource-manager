@@ -7,11 +7,17 @@
  * pipelines, and the software library), so moving it out buys real headroom rather
  * than just squeaking under the limit.
  *
- * One-way dependency on ApiStack: reuses its shared lambdaRole and lambdaEnvironment
- * (passed in as direct construct/value props) so these two functions keep the exact
- * same permissions and environment they had before the move, and attaches new
- * resources/methods directly onto ApiStack's existing RestApi via props.api.root.
- * ApiStack needs nothing back from this stack.
+ * One-way dependency on ApiStack: reuses its shared lambdaEnvironment (passed in as a
+ * plain value prop, not a construct reference) so these two functions keep the exact
+ * same environment they had before the move, and attaches new resources/methods
+ * directly onto ApiStack's existing RestApi via props.api.root. ApiStack needs
+ * nothing back from this stack.
+ *
+ * These two functions get their own auto-generated roles (not ApiStack's shared
+ * lambdaRole) - sharing that role here created a CDK dependency cycle (ApiStack
+ * ended up needing this stack's function ARN back, since environmentEncryption's
+ * KMS grant resolves through the function itself). Their explicit grants below
+ * (DynamoDB tables, KMS, S3) are the full set of permissions they need.
  */
 
 import * as cdk from 'aws-cdk-lib';
@@ -36,7 +42,6 @@ export interface ImageManagementStackProps extends cdk.StackProps {
   imageBuilderUploadsBucket: string;
   buildSubnetId: string;
   buildSecurityGroupId: string;
-  lambdaRole: iam.IRole;
   lambdaEnvironment: Record<string, string>;
   api: apigateway.RestApi;
   authorizer: apigateway.IAuthorizer;
@@ -73,7 +78,6 @@ export class ImageManagementStack extends cdk.Stack {
         ACRONYM: props.acronym,
         REGIONAL_HUBS_TABLE_NAME: props.regionalHubsTable.tableName,
       },
-      role: props.lambdaRole,
       timeout: cdk.Duration.minutes(2),
       reservedConcurrentExecutions: 5,
     });
@@ -103,7 +107,6 @@ export class ImageManagementStack extends cdk.Stack {
         SOFTWARE_LIBRARY_TABLE_NAME: props.softwareLibraryTable.tableName,
         UPLOADS_BUCKET_NAME: props.imageBuilderUploadsBucket,
       },
-      role: props.lambdaRole,
       timeout: cdk.Duration.minutes(1),
       reservedConcurrentExecutions: 5,
     });
