@@ -5,7 +5,7 @@ const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, ScanCommand, PutCommand, UpdateCommand, DeleteCommand, QueryCommand, GetCommand } = require('@aws-sdk/lib-dynamodb');
 const { EC2Client, RunInstancesCommand, StartInstancesCommand, StopInstancesCommand, TerminateInstancesCommand, DescribeInstancesCommand, CreateTagsCommand } = require('@aws-sdk/client-ec2');
 const { SSMClient, SendCommandCommand, GetCommandInvocationCommand, GetParameterCommand, PutParameterCommand } = require('@aws-sdk/client-ssm');
-const { SFNClient, StartExecutionCommand } = require('@aws-sdk/client-sfn');
+const { SFNClient, StartExecutionCommand, DescribeExecutionCommand } = require('@aws-sdk/client-sfn');
 const { DirectoryServiceClient, DescribeDirectoriesCommand, ResetUserPasswordCommand } = require('@aws-sdk/client-directory-service');
 const { DirectoryServiceDataClient, ListGroupMembersCommand } = require('@aws-sdk/client-directory-service-data');
 const { CognitoIdentityProviderClient, ListUsersCommand } = require('@aws-sdk/client-cognito-identity-provider');
@@ -77,6 +77,8 @@ exports.handler = async (event) => {
         } else if (path === '/workstations/orphans') {
           // Before the `startsWith` below, which would otherwise read 'orphans' as an instance id.
           return await findOrphans(event);
+        } else if (path === '/workstations/executions') {
+          return await getExecutionStatus(event);
         } else if (path.startsWith('/workstations/')) {
           return await getWorkstationDetails(path.split('/')[2], event);
         } else if (path === '/settings') {
@@ -872,6 +874,79 @@ exports.handler = async (event) => {
         headers: { 'Content-Type': 'application/json', ...corsHeaders },
         body: JSON.stringify({ browserSessionsEnabled: true })
       };
+    }
+  }
+
+  async function getExecutionStatus(event) {
+    // Report the state of one workstation-creation execution. POST /workstations answers 202 with
+    // an executionArn and no instanceId, and nothing here stores that ARN — so a caller that kept
+    // it has, until now, had no way to ask what became of the work.
+    //
+    // What this settles is when to stop waiting. RUNNING means the build is still going, and a
+    // caller can wait with certainty instead of inventing a timeout; a terminal status means it is
+    // over. What it does NOT settle is whether an instance leaked: the id enters the execution
+    // history only when the create function returns, and in the window that leaks one it never
+    // does. GET /workstations/orphans is what answers that.
+    //
+    // The ARN arrives as a query parameter rather than a path segment because it contains colons
+    // and slashes, and path-encoding one is a nuisance for every client.
+    const executionArn = event.queryStringParameters?.executionArn;
+    if (!executionArn) {
+      return {
+        statusCode: 400,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        body: JSON.stringify({ error: 'executionArn query parameter is required' })
+      };
+    }
+
+    try {
+      const result = await sfn.send(new DescribeExecutionCommand({ executionArn }));
+
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        body: JSON.stringify({
+          executionArn,
+          name: result.name,
+          status: result.status,
+          startDate: result.startDate,
+          stopDate: result.stopDate || null,
+          // The output only exists once the execution has succeeded, and it is a JSON string.
+          // Parsed here so a caller does not have to know that; left null when it cannot be read,
+          // because a malformed output must not fail a status question.
+          output: parseExecutionOutput(result.output)
+        })
+      };
+    } catch (error) {
+      // Step Functions retains a Standard execution's history for 90 days and then forgets it, so
+      // ExecutionDoesNotExist is an ordinary answer about an old build rather than a fault. It is
+      // reported as 404 so a caller can tell it from a refusal.
+      if (error.name === 'ExecutionDoesNotExist' || error.name === 'InvalidArn') {
+        return {
+          statusCode: 404,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders },
+          body: JSON.stringify({
+            error: 'No such execution. Step Functions keeps a completed execution for 90 days.',
+            executionArn
+          })
+        };
+      }
+      console.error('Error describing execution:', error);
+      return {
+        statusCode: 500,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        body: JSON.stringify({ error: 'Failed to describe execution' })
+      };
+    }
+  }
+
+  function parseExecutionOutput(output) {
+    if (!output) return null;
+    try {
+      return JSON.parse(output);
+    } catch (error) {
+      console.warn('Execution output was not JSON:', error.message);
+      return null;
     }
   }
 
