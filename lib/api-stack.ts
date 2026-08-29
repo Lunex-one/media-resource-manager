@@ -1238,6 +1238,12 @@ export class ApiStack extends cdk.Stack {
     const changeInstanceTypeResource = workstationsResource.addResource('change-instance-type');
     changeInstanceTypeResource.addMethod('POST', workstationIntegration, { authorizer });
 
+    // Declared as its own resource rather than left to the `{id}` path parameter below. Both would
+    // reach the same Lambda, and API Gateway prefers an exact match - but relying on that makes the
+    // route invisible in this file, which is the one place the API's shape is written down.
+    const orphansResource = workstationsResource.addResource('orphans');
+    orphansResource.addMethod('GET', workstationIntegration, { authorizer });
+
     // Volume management routes — invoked asynchronously via workstation-manager
     // (durable functions with >15min timeout cannot be invoked synchronously)
     const volumesResource = workstationsResource.addResource('volumes');

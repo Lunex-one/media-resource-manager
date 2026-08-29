@@ -74,6 +74,9 @@ exports.handler = async (event) => {
       case 'GET':
         if (path === '/workstations') {
           return await getWorkstations(event);
+        } else if (path === '/workstations/orphans') {
+          // Before the `startsWith` below, which would otherwise read 'orphans' as an instance id.
+          return await findOrphans(event);
         } else if (path.startsWith('/workstations/')) {
           return await getWorkstationDetails(path.split('/')[2], event);
         } else if (path === '/settings') {
@@ -868,6 +871,81 @@ exports.handler = async (event) => {
         statusCode: 200,
         headers: { 'Content-Type': 'application/json', ...corsHeaders },
         body: JSON.stringify({ browserSessionsEnabled: true })
+      };
+    }
+  }
+
+  async function findOrphans(event) {
+    // Find instances carrying a caller's ExternalRef tag, and say which of them MRM has no record
+    // of. An orphan is the failure this endpoint exists for: `instance-create-*` calls
+    // RunInstances and writes its DynamoDB record ~30 lines later, so anything that kills the
+    // function in between leaves a running instance that GET /workstations can never show — it
+    // scans the table, and there is no row. The instance is still tagged, because tags are set on
+    // the RunInstances call itself and are therefore atomic with the instance.
+    //
+    // Without this, an automated caller cannot tell "my build failed and made nothing" from "my
+    // build failed and left something running", and retrying the second case creates a duplicate
+    // that bills until somebody notices.
+    const externalRef = event.queryStringParameters?.externalRef;
+    if (!externalRef) {
+      return {
+        statusCode: 400,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        body: JSON.stringify({ error: 'externalRef query parameter is required' })
+      };
+    }
+
+    // Regional hubs place instances outside this Lambda's own region, so a caller that built into
+    // one has to say where to look. Defaults to the primary region's client.
+    const region = event.queryStringParameters?.region;
+    const client = region ? new EC2Client({ region }) : ec2;
+
+    try {
+      const result = await client.send(new DescribeInstancesCommand({
+        Filters: [
+          { Name: 'tag:ExternalRef', Values: [externalRef] },
+          // Terminated instances are excluded deliberately. One is evidence that a build happened
+          // and is not something a caller can adopt or must clean up, so reporting it would turn
+          // "safe to build again" into a false alarm.
+          { Name: 'instance-state-name', Values: ['pending', 'running', 'shutting-down', 'stopping', 'stopped'] }
+        ]
+      }));
+
+      const instances = (result.Reservations || []).flatMap(r => r.Instances || []);
+
+      const orphans = [];
+      const tracked = [];
+      for (const instance of instances) {
+        const known = await dynamodb.send(new GetCommand({
+          TableName: process.env.WORKSTATION_TABLE_NAME,
+          Key: { instanceId: instance.InstanceId }
+        }));
+        const summary = {
+          instanceId: instance.InstanceId,
+          state: instance.State?.Name,
+          instanceType: instance.InstanceType,
+          launchTime: instance.LaunchTime,
+          availabilityZone: instance.Placement?.AvailabilityZone,
+          privateIpAddress: instance.PrivateIpAddress || null
+        };
+        if (known.Item) {
+          tracked.push(summary.instanceId);
+        } else {
+          orphans.push(summary);
+        }
+      }
+
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        body: JSON.stringify({ externalRef, region: region || process.env.AWS_REGION, orphans, tracked })
+      };
+    } catch (error) {
+      console.error('Error searching for orphaned instances:', error);
+      return {
+        statusCode: 500,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        body: JSON.stringify({ error: 'Failed to search for orphaned instances' })
       };
     }
   }
