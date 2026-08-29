@@ -8,6 +8,7 @@ import { Aspects } from 'aws-cdk-lib';
 import { AwsSolutionsChecks, NagSuppressions } from 'cdk-nag';
 import { ApiStack } from '../lib/api-stack';
 import { WorkstationExtensionsStack } from '../lib/workstation-extensions-stack';
+import { ImageManagementStack } from '../lib/image-management-stack';
 import { DcvInfrastructureStack } from '../lib/dcv-infrastructure-stack';
 import { FrontendStack } from '../lib/frontend-stack';
 import { EventBridgeStack } from '../lib/eventbridge-stack';
@@ -420,6 +421,31 @@ const workstationExtensionsStack = new WorkstationExtensionsStack(app, `${naming
   authorizer: apiStack.authorizer,
 });
 workstationExtensionsStack.addDependency(apiStack);
+
+// Split out of ApiStack (MRM-Api) to stay under CloudFormation's 500-resource-per-stack limit.
+// This is the single largest route family (/images/*, covering AMIs, pipelines, and the
+// software library), so it buys the most headroom of any of these splits.
+const imageManagementStack = new ImageManagementStack(app, `${naming.acronym}-ImageManagement`, {
+  env,
+  acronym: naming.acronym,
+  pascalCaseName: naming.pascalCase,
+  amiTable: infrastructureStack.database.amiTable,
+  imagePipelinesTable: infrastructureStack.database.imagePipelinesTable,
+  regionalHubsTable: infrastructureStack.database.regionalHubsTable,
+  softwareLibraryTable: infrastructureStack.database.softwareLibraryTable,
+  dataEncryptionKey: infrastructureStack.security.dataEncryptionKey,
+  imageBuilderInstanceProfile: infrastructureStack.imageBuilder.instanceProfile.instanceProfileName!,
+  imageBuilderLogsBucket: infrastructureStack.imageBuilder.logsBucket.bucketName,
+  imageBuilderServiceRoleArn: infrastructureStack.imageBuilder.serviceRole.roleArn,
+  imageBuilderUploadsBucket: infrastructureStack.imageBuilder.uploadsBucket.bucketName,
+  buildSubnetId: infrastructureStack.network.privateSubnets[0].subnetId,
+  buildSecurityGroupId: infrastructureStack.imageBuilder.buildSecurityGroup.securityGroupId,
+  lambdaRole: apiStack.lambdaRole,
+  lambdaEnvironment: apiStack.lambdaEnvironment,
+  api: apiStack.api,
+  authorizer: apiStack.authorizer,
+});
+imageManagementStack.addDependency(apiStack);
 
 // WAF IP whitelist from parameters (optional - when set, restricts CloudFront access)
 // Stored as comma-separated CIDRs in parameters.json: "203.0.113.0/24,198.51.100.0/24"

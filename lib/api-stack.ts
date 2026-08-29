@@ -68,6 +68,8 @@ export class ApiStack extends cdk.Stack {
   public readonly workstationManagerFunction: lambda.Function;
   public readonly workstationsResource: apigateway.Resource;
   public readonly authorizer: apigateway.IAuthorizer;
+  public readonly lambdaRole: iam.Role;
+  public readonly lambdaEnvironment: Record<string, string>;
 
   constructor(scope: Construct, id: string, props: ApiStackProps) {
     super(scope, id, {
@@ -355,6 +357,8 @@ export class ApiStack extends cdk.Stack {
     }));
 
     // Environment variables for Lambda functions
+    this.lambdaRole = lambdaRole;
+
     const lambdaEnvironment: Record<string, string> = {
       USER_TABLE_NAME: props.userTable.tableName,
       WORKSTATION_TABLE_NAME: props.workstationTable.tableName,
@@ -373,6 +377,7 @@ export class ApiStack extends cdk.Stack {
     if (props.instanceTypeCatalogTable) {
       lambdaEnvironment.INSTANCE_TYPE_CATALOG_TABLE_NAME = props.instanceTypeCatalogTable.tableName;
     }
+    this.lambdaEnvironment = lambdaEnvironment;
 
     // Lambda functions - updated to fix syntax error
     
@@ -506,76 +511,9 @@ export class ApiStack extends cdk.Stack {
       reservedConcurrentExecutions: 25,
     });
 
-    // Image Management Lambda function
-    const imageManagerFunction = new lambda.Function(this, 'ImageManagerFunction', {
-      functionName: `${props.acronym.toLowerCase()}-image-manager`,
-      runtime: lambda.Runtime.NODEJS_22_X,
-      handler: 'index.handler',
-      description: 'Image management function',
-      code: lambda.Code.fromAsset('lambda/image-manager'),
-      environmentEncryption: props.dataEncryptionKey,
-      environment: {
-        ...lambdaEnvironment,
-        IMAGES_TABLE_NAME: props.amiTable.tableName,
-        PIPELINES_TABLE_NAME: props.imagePipelinesTable.tableName,
-        IMAGE_BUILDER_INSTANCE_PROFILE: props.imageBuilderInstanceProfile,
-        LOGS_BUCKET_NAME: props.imageBuilderLogsBucket,
-        BUILD_SUBNET_ID: props.buildSubnetId,
-        BUILD_SECURITY_GROUP_ID: props.buildSecurityGroupId,
-        IMAGE_BUILDER_SERVICE_ROLE_ARN: props.imageBuilderServiceRoleArn,
-        PASCAL_CASE_NAME: props.pascalCaseName,
-        ACRONYM: props.acronym,
-        REGIONAL_HUBS_TABLE_NAME: props.regionalHubsTable.tableName,
-      },
-      role: lambdaRole,
-      timeout: cdk.Duration.minutes(2),
-      reservedConcurrentExecutions: 5,
-    });
-
-    // Grant image function access to AMI table
-    props.amiTable.grantReadWriteData(imageManagerFunction);
-    // Grant access to pipelines table
-    props.imagePipelinesTable.grantReadWriteData(imageManagerFunction);
-    // Grant read access to regional hubs table for multi-region AMI distribution
-    props.regionalHubsTable.grantReadData(imageManagerFunction);
-
-    // Grant KMS permissions if tables use customer-managed encryption
-    if (props.dataEncryptionKey) {
-      props.dataEncryptionKey.grantEncryptDecrypt(imageManagerFunction);
-    }
-
-    // Software Library Lambda function
-    const softwareLibraryFunction = new lambda.Function(this, 'SoftwareLibraryFunction', {
-      functionName: `${props.acronym.toLowerCase()}-software-library`,
-      runtime: lambda.Runtime.NODEJS_22_X,
-      handler: 'index.handler',
-      description: 'Software library management function',
-      code: lambda.Code.fromAsset('lambda/software-library'),
-      environmentEncryption: props.dataEncryptionKey,
-      environment: {
-        ...lambdaEnvironment,
-        SOFTWARE_LIBRARY_TABLE_NAME: props.softwareLibraryTable.tableName,
-        UPLOADS_BUCKET_NAME: props.imageBuilderUploadsBucket,
-      },
-      role: lambdaRole,
-      timeout: cdk.Duration.minutes(1),
-      reservedConcurrentExecutions: 5,
-    });
-
-    // Grant software library function access to its table
-    props.softwareLibraryTable.grantReadWriteData(softwareLibraryFunction);
-
-    // Grant S3 permissions for media uploads
-    softwareLibraryFunction.addToRolePolicy(new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: ['s3:PutObject', 's3:GetObject', 's3:DeleteObject'],
-      resources: [`arn:aws:s3:::${props.imageBuilderUploadsBucket}/software/*`],
-    }));
-
-    // Grant KMS permissions if encryption key is provided
-    if (props.dataEncryptionKey) {
-      props.dataEncryptionKey.grantEncryptDecrypt(softwareLibraryFunction);
-    }
+    // Image Management + Software Library Lambda functions and their /images/* routes
+    // now live in ImageManagementStack - moved out to stay under CloudFormation's
+    // 500-resource-per-stack limit.
 
     // Install Script Agent Lambda functions (only if agent tables are provided)
     let invokeInstallScriptAgentFunction: lambda.Function | undefined;
@@ -1187,7 +1125,7 @@ export class ApiStack extends cdk.Stack {
     const groupsResource = this.api.root.addResource('groups');
     const settingsResource = this.api.root.addResource('settings');
     const domainsResource = this.api.root.addResource('domains');
-    const imagesResource = this.api.root.addResource('images');
+    // 'images' resource now lives in ImageManagementStack
     const changePasswordResource = this.api.root.addResource('change-password');
     const progressResource = this.api.root.addResource('progress');
     const storageResource = this.api.root.addResource('storage');
@@ -1240,8 +1178,7 @@ export class ApiStack extends cdk.Stack {
     const lambdaIntegration = new apigateway.LambdaIntegration(mainLambdaFunction);
     const userGroupIntegration = new apigateway.LambdaIntegration(userGroupManagerFunction);
     const userDetailsIntegration = new apigateway.LambdaIntegration(userDetailsManagerFunction);
-    const imageIntegration = new apigateway.LambdaIntegration(imageManagerFunction);
-    const softwareLibraryIntegration = new apigateway.LambdaIntegration(softwareLibraryFunction);
+    // imageIntegration / softwareLibraryIntegration now live in ImageManagementStack
     const workstationIntegration = new apigateway.LambdaIntegration(workstationManagerFunction);
     const identityCenterSyncIntegration = new apigateway.LambdaIntegration(identityCenterSyncFunction);
     const volumeManagerIntegration = new apigateway.LambdaIntegration(volumeManagerAlias);
@@ -1380,47 +1317,7 @@ export class ApiStack extends cdk.Stack {
     changePasswordResource.addMethod('POST', changePasswordIntegration, { authorizer });
 
     // Images endpoints - now using dedicated function
-    imagesResource.addMethod('GET', imageIntegration, { authorizer });
-    imagesResource.addMethod('POST', imageIntegration, { authorizer });
-    
-    // Image copy endpoint
-    const imageCopyResource = imagesResource.addResource('copy');
-    imageCopyResource.addMethod('POST', imageIntegration, { authorizer });
-    
-    const imageResource = imagesResource.addResource('{id}');
-    imageResource.addMethod('PUT', imageIntegration, { authorizer });
-    imageResource.addMethod('DELETE', imageIntegration, { authorizer });
-
-    // Image Builder Pipeline endpoints
-    const createPipelineResource = imagesResource.addResource('create-pipeline');
-    createPipelineResource.addMethod('POST', imageIntegration, { authorizer });
-    
-    const pipelinesResource = imagesResource.addResource('pipelines');
-    pipelinesResource.addMethod('GET', imageIntegration, { authorizer });
-    
-    const pipelineResource = pipelinesResource.addResource('{pipelineId}');
-    pipelineResource.addMethod('PUT', imageIntegration, { authorizer });
-    pipelineResource.addMethod('DELETE', imageIntegration, { authorizer });
-    
-    const pipelineStatusResource = pipelineResource.addResource('status');
-    pipelineStatusResource.addMethod('GET', imageIntegration, { authorizer });
-    
-    const pipelineExecuteResource = pipelineResource.addResource('execute');
-    pipelineExecuteResource.addMethod('POST', imageIntegration, { authorizer });
-
-    // Software Library endpoints
-    const softwareResource = imagesResource.addResource('software');
-    softwareResource.addMethod('GET', softwareLibraryIntegration, { authorizer });
-    softwareResource.addMethod('POST', softwareLibraryIntegration, { authorizer });
-    
-    // Upload URL endpoint for media files
-    const uploadUrlResource = softwareResource.addResource('upload-url');
-    uploadUrlResource.addMethod('POST', softwareLibraryIntegration, { authorizer });
-    
-    const softwareIdResource = softwareResource.addResource('{softwareId}');
-    softwareIdResource.addMethod('GET', softwareLibraryIntegration, { authorizer });
-    softwareIdResource.addMethod('PUT', softwareLibraryIntegration, { authorizer });
-    softwareIdResource.addMethod('DELETE', softwareLibraryIntegration, { authorizer });
+    // /images/* routes now live in ImageManagementStack
 
     // Install Script Agent endpoints (only if agent functions are available)
     if (invokeInstallScriptAgentFunction && installScriptProgressFunction && cancelInstallScriptFunction) {
