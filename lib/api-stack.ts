@@ -65,6 +65,9 @@ export class ApiStack extends cdk.Stack {
   public readonly api: apigateway.RestApi;
   public readonly dcvSessionManagerFunction: lambda.Function;
   public readonly apiUrl: string;
+  public readonly workstationManagerFunction: lambda.Function;
+  public readonly workstationsResource: apigateway.Resource;
+  public readonly authorizer: apigateway.IAuthorizer;
 
   constructor(scope: Construct, id: string, props: ApiStackProps) {
     super(scope, id, {
@@ -775,41 +778,9 @@ export class ApiStack extends cdk.Stack {
       resources: ['*'],
     }));
 
-    // Avid NEXIS Network Access Manager - reconciles a workstation's network interface
-    // security groups against its desired NEXIS access. Platform-agnostic (unlike the
-    // SMB/NFS mount managers) since it's purely a network change, not a filesystem mount.
-    const nexisNetworkAccessManagerFunction = new lambda.Function(this, 'NexisNetworkAccessManagerFunction', {
-      functionName: `${props.acronym.toLowerCase()}-nexis-network-access-manager`,
-      runtime: lambda.Runtime.NODEJS_22_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('lambda/nexis-network-access-manager'),
-      timeout: cdk.Duration.seconds(30),
-      reservedConcurrentExecutions: 5,
-      description: 'Reconcile workstation network interface security groups for Avid NEXIS access',
-      environmentEncryption: props.dataEncryptionKey,
-      environment: {
-        STORAGE_TABLE_NAME: props.storageTable.tableName,
-        WORKSTATION_TABLE_NAME: props.workstationTable.tableName,
-      }
-    });
-
-    props.storageTable.grantReadData(nexisNetworkAccessManagerFunction);
-    props.workstationTable.grantReadData(nexisNetworkAccessManagerFunction);
-
-    if (props.dataEncryptionKey) {
-      props.dataEncryptionKey.grantDecrypt(nexisNetworkAccessManagerFunction);
-    }
-
-    nexisNetworkAccessManagerFunction.addToRolePolicy(new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'ec2:DescribeInstances',
-        'ec2:ModifyNetworkInterfaceAttribute'
-      ],
-      resources: ['*'], // Cross-region (regional hub workstations) requires wildcard
-    }));
-
     // Workstation Management Lambda function
+    // (Avid NEXIS Network Access Manager now lives in WorkstationExtensionsStack —
+    // moved out to stay under CloudFormation's 500-resource-per-stack limit.)
     const workstationManagerFunction = new lambda.Function(this, 'WorkstationManagerFunction', {
       functionName: `${props.acronym.toLowerCase()}-workstation-manager`,
       runtime: lambda.Runtime.NODEJS_22_X,
@@ -831,7 +802,10 @@ export class ApiStack extends cdk.Stack {
         FSX_NFS_MOUNT_MANAGER_FUNCTION_ARN: ssm.StringParameter.valueForStringParameter(
           this, `/${props.pascalCaseName}/Storage/NfsMountManagerFunctionArn`
         ),
-        NEXIS_NETWORK_ACCESS_MANAGER_FUNCTION_ARN: nexisNetworkAccessManagerFunction.functionArn,
+        // NEXIS network access manager ARN is read from SSM - it now lives in WorkstationExtensionsStack
+        NEXIS_NETWORK_ACCESS_MANAGER_FUNCTION_ARN: ssm.StringParameter.valueForStringParameter(
+          this, `/${props.pascalCaseName}/Storage/NexisNetworkAccessManagerFunctionArn`
+        ),
         AMI_TABLE_NAME: props.amiTable.tableName,
         REGIONAL_HUBS_TABLE_NAME: props.regionalHubsTable.tableName,
       },
@@ -842,12 +816,20 @@ export class ApiStack extends cdk.Stack {
 
     // Grant workstation manager permission to invoke mount manager functions
     fsxSmbMountManagerFunction.grantInvoke(workstationManagerFunction);
-    nexisNetworkAccessManagerFunction.grantInvoke(workstationManagerFunction);    // Grant permission to invoke NFS mount manager (using wildcard since ARN is from SSM)
+    // Grant permission to invoke NFS mount manager (using wildcard since ARN is from SSM)
     workstationManagerFunction.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ['lambda:InvokeFunction'],
       resources: [`arn:aws:lambda:${this.region}:${this.account}:function:${props.acronym.toLowerCase()}-nfs-mount-manager`],
     }));
+    // Grant permission to invoke NEXIS network access manager (wildcard since ARN is from SSM;
+    // the function itself now lives in WorkstationExtensionsStack)
+    workstationManagerFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['lambda:InvokeFunction'],
+      resources: [`arn:aws:lambda:${this.region}:${this.account}:function:${props.acronym.toLowerCase()}-nexis-network-access-manager`],
+    }));
+    this.workstationManagerFunction = workstationManagerFunction;
 
     // ─── Volume Manager — Lambda durable function ─────────────────────────────
     // Dedicated durable Lambda for EBS volume operations (add, resize, detach).
@@ -1199,6 +1181,8 @@ export class ApiStack extends cdk.Stack {
 
     // API Resources
     const workstationsResource = this.api.root.addResource('workstations');
+    this.workstationsResource = workstationsResource;
+    this.authorizer = authorizer;
     const usersResource = this.api.root.addResource('users');
     const groupsResource = this.api.root.addResource('groups');
     const settingsResource = this.api.root.addResource('settings');
@@ -1293,14 +1277,8 @@ export class ApiStack extends cdk.Stack {
     const changeInstanceTypeResource = workstationsResource.addResource('change-instance-type');
     changeInstanceTypeResource.addMethod('POST', workstationIntegration, { authorizer });
 
-    // Declared as its own resource rather than left to the `{id}` path parameter below. Both would
-    // reach the same Lambda, and API Gateway prefers an exact match - but relying on that makes the
-    // route invisible in this file, which is the one place the API's shape is written down.
-    const orphansResource = workstationsResource.addResource('orphans');
-    orphansResource.addMethod('GET', workstationIntegration, { authorizer });
-
-    const workstationExecutionsResource = workstationsResource.addResource('executions');
-    workstationExecutionsResource.addMethod('GET', workstationIntegration, { authorizer });
+    // /workstations/orphans and /workstations/executions now live in WorkstationExtensionsStack
+    // (moved out to stay under CloudFormation's 500-resource-per-stack limit).
 
     // Volume management routes — invoked asynchronously via workstation-manager
     // (durable functions with >15min timeout cannot be invoked synchronously)

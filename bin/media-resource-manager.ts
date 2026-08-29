@@ -7,6 +7,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Aspects } from 'aws-cdk-lib';
 import { AwsSolutionsChecks, NagSuppressions } from 'cdk-nag';
 import { ApiStack } from '../lib/api-stack';
+import { WorkstationExtensionsStack } from '../lib/workstation-extensions-stack';
 import { DcvInfrastructureStack } from '../lib/dcv-infrastructure-stack';
 import { FrontendStack } from '../lib/frontend-stack';
 import { EventBridgeStack } from '../lib/eventbridge-stack';
@@ -402,6 +403,23 @@ apiStack.addDependency(dataSyncStack);
 if (agentCoreStack) {
   apiStack.addDependency(agentCoreStack);
 }
+
+// Split out of ApiStack (MRM-Api) to stay under CloudFormation's 500-resource-per-stack limit.
+// One-way dependency on apiStack (needs its workstationManagerFunction/workstationsResource/
+// authorizer as direct construct references); apiStack needs nothing back - it reads this
+// stack's NEXIS Lambda ARN via SSM instead.
+const workstationExtensionsStack = new WorkstationExtensionsStack(app, `${naming.acronym}-WorkstationExtensions`, {
+  env,
+  acronym: naming.acronym,
+  pascalCaseName: naming.pascalCase,
+  storageTable: infrastructureStack.database.storageTable,
+  workstationTable: infrastructureStack.database.workstationTable,
+  dataEncryptionKey: infrastructureStack.security.dataEncryptionKey,
+  workstationManagerFunction: apiStack.workstationManagerFunction,
+  workstationsResource: apiStack.workstationsResource,
+  authorizer: apiStack.authorizer,
+});
+workstationExtensionsStack.addDependency(apiStack);
 
 // WAF IP whitelist from parameters (optional - when set, restricts CloudFront access)
 // Stored as comma-separated CIDRs in parameters.json: "203.0.113.0/24,198.51.100.0/24"
