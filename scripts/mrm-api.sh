@@ -8,6 +8,7 @@
 #     ./scripts/mrm-api.sh POST /workstations/start '{"instanceId":"i-0abc"}'
 #     ./scripts/mrm-api.sh --as alice GET /workstations   # a specific user's view
 #     ./scripts/mrm-api.sh --token                        # print a token and exit
+#     ./scripts/mrm-api.sh --info                         # endpoint URL + example curl
 #
 # Identity of the minted token:
 #   By DEFAULT the token is an ADMIN token, identified as your AWS caller. This
@@ -26,6 +27,9 @@
 #   --no-admin     mint a non-admin token keeping the default identity
 #   --admin        mint an admin token (this is the default; kept for clarity)
 #   --token        print a usable bearer token and exit
+#   --info         print the resolved API endpoint and a ready-to-run curl
+#                  example (GET /workstations), then exit. Honours --as/--admin,
+#                  so the example carries the token for that identity.
 #   --raw          do not pretty-print the response with jq
 #   --verbose      show the request line, status, and acting identity
 #   --debug        verbose troubleshooting: endpoint resolution, token cache,
@@ -59,6 +63,7 @@ debug() { [ -n "${MRM_DEBUG:-}" ] && printf "${GREY}[mrm-api] %s${NC}\n" "$*" >&
 AS_ADMIN=true          # default to the administrator view (see header)
 IMPERSONATE=""         # set by --as <user>
 PRINT_TOKEN_ONLY=false
+PRINT_INFO=false
 RAW=false
 VERBOSE=false
 USE_CACHE=true
@@ -71,11 +76,13 @@ while [[ $# -gt 0 ]]; do
         --no-admin) AS_ADMIN=false; shift ;;
         --as)       AS_ADMIN=false; IMPERSONATE="${2:-}"; shift 2 ;;
         --token)    PRINT_TOKEN_ONLY=true; shift ;;
+        --info)     PRINT_INFO=true; shift ;;
         --raw)      RAW=true; shift ;;
         --verbose)  VERBOSE=true; shift ;;
         --debug)    export MRM_DEBUG=1; VERBOSE=true; shift ;;
         --no-cache) USE_CACHE=false; shift ;;
-        -h|--help)  sed -n '2,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help)  awk 'NR>1 { if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' \
+                        "${BASH_SOURCE[0]}"; exit 0 ;;
         --) shift; break ;;
         -*) err "Unknown option: $1"; exit 2 ;;
         *)  break ;;
@@ -162,6 +169,20 @@ token_is_valid() {
             } catch { process.exit(1); }
         });
     ' 2>/dev/null
+}
+
+token_ttl_minutes() {
+    # stdin: a JWT. Prints whole minutes until it expires; empty if unreadable.
+    node -e '
+        let t = "";
+        process.stdin.on("data", d => t += d);
+        process.stdin.on("end", () => {
+            try {
+                const p = JSON.parse(Buffer.from(t.trim().split(".")[1], "base64url").toString());
+                if (p.exp) process.stdout.write(String(Math.floor((p.exp - Date.now() / 1000) / 60)));
+            } catch { /* no expiry to report */ }
+        });
+    ' 2>/dev/null || true
 }
 
 mint_token() {
@@ -262,6 +283,48 @@ if [ "$PRINT_TOKEN_ONLY" = true ]; then
     [ -z "${MRM_AUTH_TOKEN:-}" ] && resolve_identity
     get_token
     echo
+    exit 0
+fi
+
+# --------------------------------------------------------------------------
+# --info: where this deployment lives, and one call you can paste as-is
+# --------------------------------------------------------------------------
+if [ "$PRINT_INFO" = true ]; then
+    mrm_env_require MRM_API_URL || exit 1
+
+    EXAMPLE_PATH="/workstations"
+
+    printf 'API endpoint:  %s\n' "$MRM_API_URL"
+    [ -n "${MRM_API_ID:-}" ] && printf 'API id:        %s  (region %s)\n' \
+        "$MRM_API_ID" "${AWS_REGION:-<default>}"
+    [ -n "${MRM_FRONTEND_URL:-}" ] && printf 'Frontend:      %s\n' "$MRM_FRONTEND_URL"
+
+    # Best effort: without AWS credentials the URL above is still worth printing,
+    # so a failure to mint degrades to a placeholder instead of aborting.
+    [ -z "${MRM_AUTH_TOKEN:-}" ] && resolve_identity
+    INFO_TOKEN="$(get_token)" || INFO_TOKEN=""
+
+    printf '\nExample — list workstations (GET %s):\n\n' "$EXAMPLE_PATH"
+    if [ -n "$INFO_TOKEN" ]; then
+        printf '  curl -sS -H "Authorization: Bearer %s" \\\n       "%s%s" | jq .\n' \
+            "$INFO_TOKEN" "$MRM_API_URL" "$EXAMPLE_PATH"
+        INFO_TTL="$(printf '%s' "$INFO_TOKEN" | token_ttl_minutes)"
+        if [ -n "${MRM_AUTH_TOKEN:-}" ]; then
+            printf '\n  That token is your $MRM_AUTH_TOKEN%s.\n' \
+                "${INFO_TTL:+, expiring in ${INFO_TTL} min}"
+        else
+            printf '\n  That token acts as %s (%s)%s.\n' \
+                "${TOKEN_USERNAME:-?}" \
+                "$([ "$AS_ADMIN" = true ] && echo admin || echo non-admin)" \
+                "${INFO_TTL:+ and expires in ${INFO_TTL} min}"
+        fi
+    else
+        printf '  curl -sS -H "Authorization: Bearer $TOKEN" \\\n       "%s%s" | jq .\n' \
+            "$MRM_API_URL" "$EXAMPLE_PATH"
+        printf '\n  No token could be minted (see above); get one with: %s --token\n' \
+            "$0"
+    fi
+    printf '\n  Same call through this script:  %s GET %s\n' "$0" "$EXAMPLE_PATH"
     exit 0
 fi
 
