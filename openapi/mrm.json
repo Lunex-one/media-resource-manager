@@ -1118,7 +1118,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Workstation"
+                "$ref": "#/components/schemas/UpdateWorkstationRequest"
               }
             }
           }
@@ -1725,6 +1725,61 @@
                 }
               }
             }
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/workstations/orphans": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "getWorkstationsOrphans",
+        "tags": [
+          "Workstations"
+        ],
+        "summary": "Find instances a create may have leaked",
+        "description": "Instances carrying a ConstellationId tag, split into those MRM has a record of and those it does not. A create tags the instance in the same call that launches it but writes its record afterwards, so anything that kills the function in between leaves a running machine no listing can show. Terminated instances are excluded: one is evidence a build happened, not something to adopt or clean up.",
+        "parameters": [
+          {
+            "name": "constellationId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "region",
+            "in": "query",
+            "required": false,
+            "description": "Where to look. Defaults to the primary region; a build targeted at a regional hub placed its instance elsewhere.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What carries the tag.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrphanReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           },
           "500": {
             "$ref": "#/components/responses/ServerError"
@@ -2348,7 +2403,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/StorageResource"
+                "$ref": "#/components/schemas/UpdateStorageRequest"
               }
             }
           }
@@ -3858,6 +3913,52 @@
         }
       ]
     },
+    "/workstations/executions": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "getWorkstationsExecutions",
+        "tags": [
+          "Workstations"
+        ],
+        "summary": "Read the state of one workstation-creation execution",
+        "description": "POST /workstations answers with an executionArn and no instance id, and nothing stores that ARN elsewhere, so this is how a caller that kept it asks what became of the work. A terminal status does not settle whether an instance leaked: the instance id enters the execution history only when the create function returns, and the window that leaks one is the window where it never does. GET /workstations/orphans answers that.",
+        "parameters": [
+          {
+            "name": "executionArn",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The execution.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      }
+    },
     "/domains": {
       "get": {
         "security": [
@@ -4033,6 +4134,18 @@
           "instanceStartTime": {
             "type": "string",
             "format": "date-time"
+          },
+          "constellationId": {
+            "type": "string",
+            "description": "The identity a Constellation plan resource is known by. Set when Constellation asks for the resource, and empty for anything created in MRM itself. Tagged onto the instance and its volumes as ConstellationId, and it is what GET /workstations/orphans searches."
+          },
+          "projectId": {
+            "type": "string",
+            "description": "The Constellation project the resource was booked for. Set when Constellation asks for the resource, and empty for anything created in MRM itself. Tagged as ProjectId."
+          },
+          "externalRef": {
+            "type": "string",
+            "description": "A free-form reference the facility owns. Empty by default, editable from MRM's own list views, and tagged as ExternalRef. Because it can change at any time, nothing depends on it for recovery."
           }
         }
       },
@@ -4081,6 +4194,18 @@
           "region": {
             "type": "string",
             "description": "Target a satellite regional hub. Unknown region returns 400."
+          },
+          "constellationId": {
+            "type": "string",
+            "description": "The identity a Constellation plan resource is known by. Set when Constellation asks for the resource, and empty for anything created in MRM itself. Tagged onto the instance and its volumes as ConstellationId, and it is what GET /workstations/orphans searches."
+          },
+          "projectId": {
+            "type": "string",
+            "description": "The Constellation project the resource was booked for. Set when Constellation asks for the resource, and empty for anything created in MRM itself. Tagged as ProjectId."
+          },
+          "externalRef": {
+            "type": "string",
+            "description": "A free-form reference the facility owns. Empty by default, editable from MRM's own list views, and tagged as ExternalRef. Because it can change at any time, nothing depends on it for recovery."
           }
         }
       },
@@ -4846,7 +4971,8 @@
             "enum": [
               "fsx-windows",
               "fsx-ontap",
-              "mountpoint-s3"
+              "mountpoint-s3",
+              "nexis"
             ]
           },
           "status": {
@@ -4864,6 +4990,18 @@
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "constellationId": {
+            "type": "string",
+            "description": "The identity a Constellation plan resource is known by. Set when Constellation asks for the resource, and empty for anything created in MRM itself. Tagged onto the instance and its volumes as ConstellationId, and it is what GET /workstations/orphans searches."
+          },
+          "projectId": {
+            "type": "string",
+            "description": "The Constellation project the resource was booked for. Set when Constellation asks for the resource, and empty for anything created in MRM itself. Tagged as ProjectId."
+          },
+          "externalRef": {
+            "type": "string",
+            "description": "A free-form reference the facility owns. Empty by default, editable from MRM's own list views, and tagged as ExternalRef. Because it can change at any time, nothing depends on it for recovery."
           }
         }
       },
@@ -4882,7 +5020,8 @@
             "enum": [
               "fsx-windows",
               "fsx-ontap",
-              "mountpoint-s3"
+              "mountpoint-s3",
+              "nexis"
             ],
             "default": "fsx-windows"
           },
@@ -4895,6 +5034,18 @@
           "configuration": {
             "type": "object",
             "description": "Type-specific; see docs/API.md."
+          },
+          "constellationId": {
+            "type": "string",
+            "description": "The identity a Constellation plan resource is known by. Set when Constellation asks for the resource, and empty for anything created in MRM itself. Tagged onto the instance and its volumes as ConstellationId, and it is what GET /workstations/orphans searches."
+          },
+          "projectId": {
+            "type": "string",
+            "description": "The Constellation project the resource was booked for. Set when Constellation asks for the resource, and empty for anything created in MRM itself. Tagged as ProjectId."
+          },
+          "externalRef": {
+            "type": "string",
+            "description": "A free-form reference the facility owns. Empty by default, editable from MRM's own list views, and tagged as ExternalRef. Because it can change at any time, nothing depends on it for recovery."
           }
         }
       },
@@ -5425,6 +5576,147 @@
           }
         },
         "description": "Only events from the most recent start run are returned."
+      },
+      "UpdateWorkstationRequest": {
+        "type": "object",
+        "description": "A partial update. Only the fields below are read; anything else in the body is ignored. An empty string clears assignedUserId or any of the three references, removing the attribute and the matching EC2 tag rather than storing an empty value.",
+        "properties": {
+          "assignedUserId": {
+            "type": "string"
+          },
+          "workstationName": {
+            "type": "string",
+            "description": "Also rewrites the instance's Name tag."
+          },
+          "storageConfig": {
+            "type": "object",
+            "description": "Triggers a mount reconciliation for the instance's platform."
+          },
+          "constellationId": {
+            "type": "string",
+            "description": "The identity a Constellation plan resource is known by. Set when Constellation asks for the resource, and empty for anything created in MRM itself. Tagged onto the instance and its volumes as ConstellationId, and it is what GET /workstations/orphans searches."
+          },
+          "projectId": {
+            "type": "string",
+            "description": "The Constellation project the resource was booked for. Set when Constellation asks for the resource, and empty for anything created in MRM itself. Tagged as ProjectId."
+          },
+          "externalRef": {
+            "type": "string",
+            "description": "A free-form reference the facility owns. Empty by default, editable from MRM's own list views, and tagged as ExternalRef. Because it can change at any time, nothing depends on it for recovery."
+          }
+        }
+      },
+      "UpdateStorageRequest": {
+        "type": "object",
+        "description": "A partial update. Only the fields below are read. An empty string clears any of the three references. The references reach the real AWS resources as CloudFormation stack tags when the resource is created, so editing one here changes the MRM record and not the tags on a filesystem that already exists.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "configuration": {
+            "type": "object"
+          },
+          "constellationId": {
+            "type": "string",
+            "description": "The identity a Constellation plan resource is known by. Set when Constellation asks for the resource, and empty for anything created in MRM itself. Tagged onto the instance and its volumes as ConstellationId, and it is what GET /workstations/orphans searches."
+          },
+          "projectId": {
+            "type": "string",
+            "description": "The Constellation project the resource was booked for. Set when Constellation asks for the resource, and empty for anything created in MRM itself. Tagged as ProjectId."
+          },
+          "externalRef": {
+            "type": "string",
+            "description": "A free-form reference the facility owns. Empty by default, editable from MRM's own list views, and tagged as ExternalRef. Because it can change at any time, nothing depends on it for recovery."
+          }
+        }
+      },
+      "OrphanReport": {
+        "type": "object",
+        "properties": {
+          "constellationId": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "orphans": {
+            "type": "array",
+            "description": "Instances carrying the tag that MRM holds no record of.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "instanceType": {
+                  "type": "string"
+                },
+                "launchTime": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "availabilityZone": {
+                  "type": "string"
+                },
+                "privateIpAddress": {
+                  "type": "string",
+                  "nullable": true
+                }
+              }
+            }
+          },
+          "tracked": {
+            "type": "array",
+            "description": "Instance ids carrying the tag that MRM does have a record of.",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ExecutionStatus": {
+        "type": "object",
+        "properties": {
+          "executionArn": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "Step Functions' own word for the build: RUNNING means it is still going, and any other value is terminal.",
+            "enum": [
+              "RUNNING",
+              "SUCCEEDED",
+              "FAILED",
+              "TIMED_OUT",
+              "ABORTED"
+            ]
+          },
+          "startDate": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "stopDate": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "output": {
+            "type": "object",
+            "nullable": true
+          }
+        }
       }
     },
     "responses": {
