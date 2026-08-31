@@ -211,7 +211,13 @@ and pretty-prints the response:
 ./scripts/mrm-api.sh --as alice GET /workstations             # just alice's machines
 ./scripts/mrm-api.sh POST /workstations/start '{"instanceId":"i-0abc123"}'
 ./scripts/mrm-api.sh --verbose --no-cache GET /images
+./scripts/mrm-api.sh --info                                   # endpoint + example curl
 ```
+
+`--info` answers "what am I actually pointing at, and how do I call it by hand?" — it prints the
+resolved base URL (plus API id, region and frontend URL) and a `curl` for `GET /workstations`
+carrying a live token, ready to paste anywhere. It honours `--as`/`--admin`, so the example is for
+the identity you name, and it reports whose token it is and how long it lasts.
 
 | Flag | Effect |
 |---|---|
@@ -219,6 +225,7 @@ and pretty-prints the response:
 | `--no-admin` | Mint a non-admin token keeping the default (caller) identity |
 | `--admin` | Mint an admin token (this is the default; kept for clarity) |
 | `--token` | Print a bearer token and exit |
+| `--info` | Print the resolved endpoint and a ready-to-run `curl` example, then exit |
 | `--raw` | Skip `jq` pretty-printing |
 | `--verbose` | Log the request line, HTTP status, and the acting identity |
 | `--debug` | Full troubleshooting trace (also via `MRM_DEBUG=1`) — see below |
