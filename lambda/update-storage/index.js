@@ -31,6 +31,7 @@ exports.handler = async (event) => {
     
     const data = JSON.parse(event.body || '{}');
     const updateExpression = [];
+    const removeExpression = [];
     const expressionAttributeNames = {};
     const expressionAttributeValues = {};
     
@@ -46,13 +47,43 @@ exports.handler = async (event) => {
       expressionAttributeValues[':status'] = data.status;
     }
     
+    // The UI's edit form has always sent this alongside the name; nothing here read it until
+    // 2026-08-31, so editing a description silently did nothing. Unlike the fields above, an empty
+    // description is a real answer - "this resource has no description" - and create-storage
+    // already stores '' for one, so it is set rather than removed.
+    if (data.description !== undefined) {
+      updateExpression.push('#description = :description');
+      expressionAttributeNames['#description'] = 'description';
+      expressionAttributeValues[':description'] = data.description;
+    }
+    
     if (data.configuration) {
       updateExpression.push('#configuration = :configuration');
       expressionAttributeNames['#configuration'] = 'configuration';
       expressionAttributeValues[':configuration'] = data.configuration;
     }
     
-    if (updateExpression.length === 0) {
+    // The three references, under the rule create-storage writes them by: a value sets the
+    // attribute, an empty one removes it, so "nobody set this" stays distinguishable from "set to
+    // nothing".
+    //
+    // This changes the record only. The same three reach the real AWS resources as CloudFormation
+    // stack tags, and those are fixed when the stack is created - so a reference edited here is
+    // right in MRM and stale on the bill for a resource that already exists. Retagging would mean
+    // a stack update per storage type, which is not what an edit of a label should trigger.
+    for (const field of ['constellationId', 'projectId', 'externalRef']) {
+      if (data[field] === undefined) continue;
+      if (data[field] === '' || data[field] === null) {
+        removeExpression.push(`#${field}`);
+        expressionAttributeNames[`#${field}`] = field;
+      } else {
+        updateExpression.push(`#${field} = :${field}`);
+        expressionAttributeNames[`#${field}`] = field;
+        expressionAttributeValues[`:${field}`] = data[field];
+      }
+    }
+    
+    if (updateExpression.length === 0 && removeExpression.length === 0) {
       return {
         statusCode: 400,
         headers: corsHeaders,
@@ -63,14 +94,24 @@ exports.handler = async (event) => {
       };
     }
     
-    const result = await dynamodb.send(new UpdateCommand({
+    const clauses = [];
+    if (updateExpression.length > 0) clauses.push(`SET ${updateExpression.join(', ')}`);
+    if (removeExpression.length > 0) clauses.push(`REMOVE ${removeExpression.join(', ')}`);
+    
+    const updateParams = {
       TableName: process.env.STORAGE_TABLE_NAME,
       Key: { storageId },
-      UpdateExpression: `SET ${updateExpression.join(', ')}`,
+      UpdateExpression: clauses.join(' '),
       ExpressionAttributeNames: expressionAttributeNames,
-      ExpressionAttributeValues: expressionAttributeValues,
       ReturnValues: 'ALL_NEW'
-    }));
+    };
+    // DynamoDB rejects an empty ExpressionAttributeValues, which a request that only clears
+    // references would otherwise send.
+    if (Object.keys(expressionAttributeValues).length > 0) {
+      updateParams.ExpressionAttributeValues = expressionAttributeValues;
+    }
+    
+    const result = await dynamodb.send(new UpdateCommand(updateParams));
     
     return {
       statusCode: 200,

@@ -511,6 +511,19 @@ const WorkstationDetailsAntd: React.FC<WorkstationDetailsAntdProps> = ({
           <Divider style={{ margin: 0 }} />
 
           <div>
+            {/* Read-only here. constellationId and projectId are set when Constellation asks for
+                the machine; externalRef is edited from the workstation list. */}
+            <Text strong style={{ fontSize: 14, display: 'block', marginBottom: 12 }}>References</Text>
+            <Descriptions column={{ xs: 1, sm: 2, md: 3 }} size="small">
+              <Descriptions.Item label="Constellation ID">{workstation.constellationId || '—'}</Descriptions.Item>
+              <Descriptions.Item label="Project ID">{workstation.projectId || '—'}</Descriptions.Item>
+              <Descriptions.Item label="External Reference">{workstation.externalRef || '—'}</Descriptions.Item>
+            </Descriptions>
+          </div>
+
+          <Divider style={{ margin: 0 }} />
+
+          <div>
             <Text strong style={{ fontSize: 14, display: 'block', marginBottom: 12 }}>Compute Configuration</Text>
             <Descriptions column={{ xs: 1, sm: 2, md: 3 }} size="small">
               <Descriptions.Item label="Instance Type">{ec2Instance.InstanceType}</Descriptions.Item>

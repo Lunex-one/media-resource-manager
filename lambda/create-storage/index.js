@@ -26,6 +26,38 @@ function generateStorageId() {
 }
 
 /**
+ * The three references a caller may attach to a storage resource, as record attributes.
+ *
+ * `constellationId` is the identity a Constellation plan resource is known by, `projectId` the
+ * project it was booked for, and `externalRef` a free-form reference the facility can edit
+ * afterwards. Each is omitted rather than stored as '' so that "nobody set this" stays
+ * distinguishable from "set to nothing", which is the same rule the workstation records follow.
+ */
+function referenceAttributes(data) {
+  return {
+    ...(data.constellationId && { constellationId: data.constellationId }),
+    ...(data.projectId && { projectId: data.projectId }),
+    ...(data.externalRef && { externalRef: data.externalRef })
+  };
+}
+
+/**
+ * The same three references, as the state machine input carries them to CloudFormation.
+ *
+ * All three keys are present here even when empty, and that is deliberate: the creation state
+ * machine passes them on with an explicit `"references.$": "$.references"` mapping, and Step
+ * Functions fails an execution outright when such a path does not resolve. Dropping the empties is
+ * storage-cfn-worker's job, once the values are somewhere they cannot break the workflow.
+ */
+function referenceValues(data) {
+  return {
+    constellationId: data.constellationId || '',
+    projectId: data.projectId || '',
+    externalRef: data.externalRef || ''
+  };
+}
+
+/**
  * Validate that the requested region is valid for storage creation
  * - Primary region is always valid
  * - Regional hubs must exist and be in 'active' status
@@ -237,6 +269,9 @@ async function createMountpointS3Storage(storageId, data, configuration, created
     uid: uid,
     gid: gid,
     cachePath: configuration.cachePath || '',
+    // Recorded, but tagged nowhere: this type creates no AWS resource of its own, it points at a
+    // bucket somebody else owns, so there is nothing here for a cost query to group.
+    ...referenceAttributes(data),
     configuration
   };
 
@@ -270,6 +305,7 @@ async function createMountpointS3Storage(storageId, data, configuration, created
         uid: uid,
         gid: gid,
         cachePath: configuration.cachePath || '',
+        ...referenceAttributes(data),
         configuration,
         createdAt
       }
@@ -309,6 +345,7 @@ async function createFsxWindowsStorage(storageId, data, configuration, createdAt
     storageCapacity: configuration.ssdStorageCapacity,
     throughput: configuration.throughputCapacity,
     backupRetention: configuration.automaticBackupRetentionPeriod,
+    ...referenceAttributes(data),
     configuration
   };
 
@@ -333,6 +370,7 @@ async function createFsxWindowsStorage(storageId, data, configuration, createdAt
       name: data.name,
       type: 'fsx-windows',
       region: region,
+      references: referenceValues(data),
       configuration
     }),
     name: executionName
@@ -352,6 +390,7 @@ async function createFsxWindowsStorage(storageId, data, configuration, createdAt
         status: 'initializing',
         platform: 'windows',
         region: region,
+        ...referenceAttributes(data),
         configuration,
         createdAt
       }
@@ -415,6 +454,7 @@ async function createFsxOntapStorage(storageId, data, configuration, createdAt, 
     volumeSize: configuration.volumeSize,
     backupRetention: configuration.backupRetention,
     securityStyle: configuration.securityStyle,
+    ...referenceAttributes(data),
     configuration
   };
 
@@ -439,6 +479,7 @@ async function createFsxOntapStorage(storageId, data, configuration, createdAt, 
       name: data.name,
       type: 'fsx-ontap',
       region: region,
+      references: referenceValues(data),
       configuration
     }),
     name: executionName
@@ -462,6 +503,7 @@ async function createFsxOntapStorage(storageId, data, configuration, createdAt, 
         throughput: totalThroughput,
         haPairs: configuration.haPairs,
         deploymentType: configuration.deploymentType,
+        ...referenceAttributes(data),
         configuration,
         createdAt
       }
@@ -500,6 +542,7 @@ async function createNexisStorage(storageId, data, configuration, createdAt, tar
     platform: 'multi', // NEXIS client is installable on Windows, Linux, and macOS
     region,
     instanceType,
+    ...referenceAttributes(data),
     configuration
   };
 
@@ -522,6 +565,7 @@ async function createNexisStorage(storageId, data, configuration, createdAt, tar
       name: data.name,
       type: 'nexis',
       region,
+      references: referenceValues(data),
       configuration: { ...configuration, instanceType }
     }),
     name: executionName
@@ -542,6 +586,7 @@ async function createNexisStorage(storageId, data, configuration, createdAt, tar
         platform: 'multi',
         region,
         instanceType,
+        ...referenceAttributes(data),
         configuration,
         createdAt
       }

@@ -826,7 +826,12 @@ export class StorageStack extends cdk.Stack {
             "region.$": "$.region",
             "stackName.$": "$.templateData.stackName",
             "templateBody.$": "$.templateData.template",
-            "parameters.$": "$.templateData.parameters"
+            "parameters.$": "$.templateData.parameters",
+            // The caller's constellationId/projectId/externalRef, which the worker turns into stack
+            // tags so CloudFormation puts them on the real resources. create-storage always sends
+            // all three keys, empty or not, because this mapping is a JSONPath and Step Functions
+            // fails the whole execution when one does not resolve.
+            "references.$": "$.references"
           },
           ResultPath: "$.StackId",
           Next: "WaitForStackCreation",

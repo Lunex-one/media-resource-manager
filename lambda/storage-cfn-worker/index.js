@@ -35,7 +35,7 @@ function getCfnClient(region) {
 exports.handler = async (event) => {
   console.log('StorageCfnWorker event:', JSON.stringify(event, null, 2));
   
-  const { action, region, stackName, templateBody, parameters } = event;
+  const { action, region, stackName, templateBody, parameters, references } = event;
   
   if (!action) {
     throw new Error('Missing required parameter: action');
@@ -53,7 +53,7 @@ exports.handler = async (event) => {
   
   switch (action) {
     case 'createStack':
-      return await createStack(cfn, stackName, templateBody, parameters, targetRegion);
+      return await createStack(cfn, stackName, templateBody, parameters, targetRegion, references);
     
     case 'describeStacks':
       return await describeStacks(cfn, stackName, targetRegion);
@@ -67,9 +67,34 @@ exports.handler = async (event) => {
 };
 
 /**
+ * The three references a caller attached to this storage resource, as CloudFormation stack tags.
+ *
+ * Stack tags are the cheap way to reach the real AWS resources: CloudFormation applies them to
+ * every resource in the stack that supports tagging, so the FSx file system, its SVM and volume,
+ * the security group and a NEXIS instance all end up carrying these without the generated templates
+ * knowing anything about them.
+ *
+ * The empties are dropped here rather than upstream. create-storage has to send all three keys
+ * whatever their values, because the state machine reaches them by JSONPath and Step Functions
+ * fails an execution when such a path does not resolve - so this is the first place it is safe to
+ * leave a reference out. ConstellationId and ProjectId are what a per-project cost query groups by,
+ * once they are activated as cost allocation tags in the payer account.
+ */
+function referenceTags(references) {
+  const keys = {
+    constellationId: 'ConstellationId',
+    projectId: 'ProjectId',
+    externalRef: 'ExternalRef'
+  };
+  return Object.entries(keys)
+    .filter(([field]) => references?.[field])
+    .map(([field, Key]) => ({ Key, Value: references[field] }));
+}
+
+/**
  * Create a CloudFormation stack
  */
-async function createStack(cfn, stackName, templateBody, parameters, region) {
+async function createStack(cfn, stackName, templateBody, parameters, region, references) {
   if (!templateBody) {
     throw new Error('Missing required parameter: templateBody for createStack');
   }
@@ -83,7 +108,8 @@ async function createStack(cfn, stackName, templateBody, parameters, region) {
       Tags: [
         { Key: 'ManagedBy', Value: process.env.PRODUCT_NAME || 'MediaResourceManager' },
         { Key: 'CreatedBy', Value: 'StorageStateMachine' },
-        { Key: 'Region', Value: region }
+        { Key: 'Region', Value: region },
+        ...referenceTags(references)
       ],
       OnFailure: 'DELETE' // Clean up on failure
     }));

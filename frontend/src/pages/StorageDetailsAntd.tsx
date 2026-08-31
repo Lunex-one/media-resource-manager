@@ -269,6 +269,19 @@ umount ${details.mountPath}`;
           <Divider style={{ margin: 0 }} />
 
           <div>
+            {/* Read-only here. constellationId and projectId are set when Constellation asks for
+                the filesystem; externalRef is edited from the filesystem list. */}
+            <Text strong style={{ fontSize: 14, display: 'block', marginBottom: 12 }}>References</Text>
+            <Descriptions column={{ xs: 1, sm: 2, md: 3 }} size="small">
+              <Descriptions.Item label="Constellation ID">{details.constellationId || '—'}</Descriptions.Item>
+              <Descriptions.Item label="Project ID">{details.projectId || '—'}</Descriptions.Item>
+              <Descriptions.Item label="External Reference">{details.externalRef || '—'}</Descriptions.Item>
+            </Descriptions>
+          </div>
+
+          <Divider style={{ margin: 0 }} />
+
+          <div>
             <Text strong style={{ fontSize: 14, display: 'block', marginBottom: 12 }}>Configuration</Text>
             {details.type === 'fsx-ontap' && (
               <Descriptions column={{ xs: 1, sm: 2, md: 4 }} size="small">
