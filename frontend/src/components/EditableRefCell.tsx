@@ -14,6 +14,8 @@ interface EditableRefCellProps {
   editable: boolean;
   /** Saves the new value. An empty string means "clear this reference". */
   onSave: (next: string) => Promise<void>;
+  /** How wide the input is while editing. It has to leave room for the two buttons beside it
+      inside the table cell, which is why the default is well under the column's own width. */
   width?: number;
 }
 
@@ -25,7 +27,7 @@ interface EditableRefCellProps {
  * value is a real answer, and saving one clears the reference, because both the workstation and
  * the storage API read '' as "remove this attribute" rather than "store nothing".
  */
-export default function EditableRefCell({ value, editable, onSave, width = 200 }: EditableRefCellProps) {
+export default function EditableRefCell({ value, editable, onSave, width = 140 }: EditableRefCellProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [saving, setSaving] = useState(false);
