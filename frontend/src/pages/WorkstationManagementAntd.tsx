@@ -1617,6 +1617,8 @@ const WorkstationManagementAntd: React.FC<WorkstationManagementAntdProps> = ({
       title: 'Name',
       dataIndex: 'workstationName',
       key: 'workstationName',
+      width: 300,
+      fixed: 'left' as const,
       sorter: (a, b) => (a.workstationName || '').localeCompare(b.workstationName || ''),
       sortOrder: sortedInfo?.columnKey === 'workstationName' ? sortedInfo.order : null,
       render: (name, record) => {
@@ -1699,6 +1701,7 @@ const WorkstationManagementAntd: React.FC<WorkstationManagementAntdProps> = ({
     {
       title: 'Assigned To',
       key: 'assignedUser',
+      width: 180,
       sorter: (a, b) => (a.assignedUserDisplay || a.assignedUserId || '').localeCompare(b.assignedUserDisplay || b.assignedUserId || ''),
       sortOrder: sortedInfo?.columnKey === 'assignedUser' ? sortedInfo.order : null,
       render: (_, record) => {
@@ -1803,6 +1806,7 @@ const WorkstationManagementAntd: React.FC<WorkstationManagementAntdProps> = ({
       title: 'Instance',
       dataIndex: 'instanceStatus',
       key: 'instanceStatus',
+      width: 150,
       sorter: (a, b) => a.instanceStatus.localeCompare(b.instanceStatus),
       sortOrder: sortedInfo?.columnKey === 'instanceStatus' ? sortedInfo.order : null,
       render: (status, record) => (
@@ -1821,6 +1825,7 @@ const WorkstationManagementAntd: React.FC<WorkstationManagementAntdProps> = ({
     {
       title: 'Status',
       key: 'dcvStatus',
+      width: 130,
       sorter: (a, b) => (a.dcvStatus || '').localeCompare(b.dcvStatus || ''),
       sortOrder: sortedInfo?.columnKey === 'dcvStatus' ? sortedInfo.order : null,
       render: (_, record) => getDcvStatusTag(record.dcvStatus, record.status, record.instanceStatus, record.errorMessage),
@@ -1829,6 +1834,7 @@ const WorkstationManagementAntd: React.FC<WorkstationManagementAntdProps> = ({
       title: 'Type',
       dataIndex: 'instanceType',
       key: 'instanceType',
+      width: 130,
       sorter: (a, b) => a.instanceType.localeCompare(b.instanceType),
       sortOrder: sortedInfo?.columnKey === 'instanceType' ? sortedInfo.order : null,
     },
@@ -1836,6 +1842,7 @@ const WorkstationManagementAntd: React.FC<WorkstationManagementAntdProps> = ({
       title: 'Region',
       dataIndex: 'region',
       key: 'region',
+      width: 120,
       sorter: (a, b) => (a.region || '').localeCompare(b.region || ''),
       sortOrder: sortedInfo?.columnKey === 'region' ? sortedInfo.order : null,
       render: (region) => region || 'Primary',
@@ -1844,7 +1851,7 @@ const WorkstationManagementAntd: React.FC<WorkstationManagementAntdProps> = ({
       title: 'Constellation ID',
       dataIndex: 'constellationId',
       key: 'constellationId',
-      width: 160,
+      width: 170,
       ellipsis: true,
       sorter: (a, b) => (a.constellationId || '').localeCompare(b.constellationId || ''),
       sortOrder: sortedInfo?.columnKey === 'constellationId' ? sortedInfo.order : null,
@@ -1856,7 +1863,7 @@ const WorkstationManagementAntd: React.FC<WorkstationManagementAntdProps> = ({
       title: 'Project ID',
       dataIndex: 'projectId',
       key: 'projectId',
-      width: 160,
+      width: 170,
       ellipsis: true,
       sorter: (a, b) => (a.projectId || '').localeCompare(b.projectId || ''),
       sortOrder: sortedInfo?.columnKey === 'projectId' ? sortedInfo.order : null,
@@ -1866,7 +1873,7 @@ const WorkstationManagementAntd: React.FC<WorkstationManagementAntdProps> = ({
       title: 'External Ref',
       dataIndex: 'externalRef',
       key: 'externalRef',
-      width: 200,
+      width: 220,
       sorter: (a, b) => (a.externalRef || '').localeCompare(b.externalRef || ''),
       sortOrder: sortedInfo?.columnKey === 'externalRef' ? sortedInfo.order : null,
       render: (_, record) => (
@@ -1881,6 +1888,7 @@ const WorkstationManagementAntd: React.FC<WorkstationManagementAntdProps> = ({
       title: 'Created',
       dataIndex: 'createdAt',
       key: 'createdAt',
+      width: 120,
       sorter: (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
       sortOrder: sortedInfo?.columnKey === 'createdAt' ? sortedInfo.order : null,
       render: (date) => new Date(date).toLocaleDateString(),
@@ -2082,11 +2090,13 @@ const WorkstationManagementAntd: React.FC<WorkstationManagementAntdProps> = ({
             rowSelection={{
               selectedRowKeys,
               onChange: setSelectedRowKeys,
+              fixed: true,
             }}
             columns={columns}
             dataSource={filteredWorkstations}
             rowKey="instanceId"
             loading={loading}
+            scroll={{ x: 1950 }}
             onChange={handleTableChange}
             pagination={{
               pageSize,

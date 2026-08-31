@@ -454,6 +454,7 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
       title: 'Resource ID',
       key: 'resourceId',
       width: 180,
+      fixed: 'left' as const,
       sorter: (a, b) => getResourceId(a).localeCompare(getResourceId(b)),
       sortOrder: sortedInfo?.columnKey === 'resourceId' ? sortedInfo.order : null,
       render: (_, record) => (
@@ -546,7 +547,7 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
       title: 'External Ref',
       dataIndex: 'externalRef',
       key: 'externalRef',
-      width: 200,
+      width: 220,
       sorter: (a, b) => (a.externalRef || '').localeCompare(b.externalRef || ''),
       sortOrder: sortedInfo?.columnKey === 'externalRef' ? sortedInfo.order : null,
       render: (_, record) => (
@@ -711,9 +712,11 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
             columns={columns}
             dataSource={filteredResources}
             loading={loading}
+            scroll={{ x: 1750 }}
             rowSelection={{
               selectedRowKeys,
               onChange: setSelectedRowKeys,
+              fixed: true,
             }}
             onChange={handleTableChange}
             pagination={{
