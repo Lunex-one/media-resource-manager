@@ -20,6 +20,7 @@ import {
   List,
   Tag,
   Collapse,
+  Select,
 } from 'antd';
 import type { UploadProps } from 'antd';
 import {
@@ -51,6 +52,8 @@ import { Upload as S3Upload } from '@aws-sdk/lib-storage';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { fromCognitoIdentityPool } from '@aws-sdk/credential-providers';
 import AppLayoutAntd from '../components/AppLayoutAntd';
+import { getAuthToken } from '../utils/auth';
+import { apiCall } from '../utils/api';
 import {
   browseS3Objects,
   getS3DownloadUrl,
@@ -87,6 +90,18 @@ interface UploadItem {
   error?: string;
 }
 
+/**
+ * A bucket a mountpoint-s3 storage resource points at, offered as an additional bucket to
+ * browse alongside the default Media Bucket - including ones in a Regional Hub, since
+ * mountpoint-s3 already supports connecting to a bucket in any region.
+ */
+interface RegisteredBucket {
+  storageId: string;
+  label: string;
+  bucketName: string;
+  region?: string;
+}
+
 const BucketsAntd: React.FC<BucketsAntdProps> = ({
   user,
   isAdmin,
@@ -112,11 +127,20 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
   const [hasMore, setHasMore] = useState(false);
   const [totalLoaded, setTotalLoaded] = useState(0);
 
-  // When useCognitoAuth is false (e.g. LDAP auth mode), Cognito Identity Pool federation can't
-  // validate our custom-signed JWT, so all S3 operations go through backend API endpoints instead
-  // (using the Lambda's own IAM role) rather than direct browser-to-S3 calls.
-  const useBackendApi = !config?.useCognitoAuth;
-  const isReady = useBackendApi ? !!config?.mediaBucketName : !!s3Client;
+  // Additional buckets a mountpoint-s3 storage resource points at, offered alongside the
+  // default Media Bucket so a bucket in a Regional Hub gets the same actions as the one MRM
+  // deployed with itself.
+  const [additionalBuckets, setAdditionalBuckets] = useState<RegisteredBucket[]>([]);
+  const [selectedBucketName, setSelectedBucketName] = useState<string>('');
+
+  // The default Media Bucket is the only one Cognito Identity Pool federation is scoped to grant
+  // (see storage-stack.ts's authenticatedRole.grantReadWrite/grantRead) - it stays on direct
+  // browser-to-S3 exactly as before. Any other bucket goes through the backend API regardless of
+  // auth mode: storage-list-s3-buckets already has its own account-wide, region-aware S3
+  // permissions, so this avoids needing a new IAM grant every time a bucket is connected.
+  const isDefaultBucket = !selectedBucketName || selectedBucketName === config?.mediaBucketName;
+  const useBackendApi = !config?.useCognitoAuth || !isDefaultBucket;
+  const isReady = useBackendApi ? !!selectedBucketName : !!s3Client;
 
   // Initialize S3 client with Cognito Identity Pool credentials (Cognito auth mode only)
   useEffect(() => {
@@ -171,6 +195,45 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
     initializeS3Client();
   }, [config, useBackendApi]);
 
+  // Fetch mountpoint-s3 storage resources to offer as additional buckets, and default the
+  // selection to the Media Bucket once config is available.
+  useEffect(() => {
+    if (config?.mediaBucketName && !selectedBucketName) {
+      setSelectedBucketName(config.mediaBucketName);
+    }
+
+    const token = getAuthToken();
+    if (!token) return;
+
+    apiCall('storage', { headers: { Authorization: `Bearer ${token}` } })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const data = await response.json();
+        const safeData = Array.isArray(data) ? data : (data.data || []);
+        const buckets: RegisteredBucket[] = safeData
+          .filter((r: any) => r.type === 'mountpoint-s3' && r.configuration?.bucketName)
+          .map((r: any) => ({
+            storageId: r.storageId,
+            label: r.name || r.configuration.bucketName,
+            bucketName: r.configuration.bucketName,
+            region: r.region,
+          }));
+        setAdditionalBuckets(buckets);
+      })
+      .catch((error) => console.error('Failed to load additional buckets:', error));
+  }, [config?.mediaBucketName]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Switching buckets means browsing from that bucket's root - carrying over the current
+  // prefix or paginated state from the previous bucket would be meaningless at best.
+  const handleBucketChange = (bucketName: string) => {
+    setSelectedBucketName(bucketName);
+    setCurrentPrefix('');
+    setObjects([]);
+    setContinuationToken(undefined);
+    setHasMore(false);
+    setTotalLoaded(0);
+  };
+
   // Load objects when client/API is ready or prefix changes
   const loadObjects = useCallback(async (loadMore = false) => {
     if (!config?.mediaBucketName) return;
@@ -182,7 +245,7 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
       let nextToken: string | undefined;
 
       if (useBackendApi) {
-        const result = await browseS3Objects(config.mediaBucketName, currentPrefix);
+        const result = await browseS3Objects(selectedBucketName, currentPrefix);
 
         for (const folder of result.folders) {
           const folderName = folder.key.slice(currentPrefix.length, -1);
@@ -207,7 +270,7 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
         }
       } else {
         const command = new ListObjectsV2Command({
-          Bucket: config.mediaBucketName,
+          Bucket: selectedBucketName,
           Prefix: currentPrefix,
           Delimiter: '/',
           MaxKeys: 100, // Load 100 items at a time
@@ -268,7 +331,7 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [s3Client, config?.mediaBucketName, currentPrefix, continuationToken, messageApi, useBackendApi]);
+  }, [s3Client, selectedBucketName, currentPrefix, continuationToken, messageApi, useBackendApi]);
 
   // Reset pagination when prefix changes
   useEffect(() => {
@@ -281,7 +344,7 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
     if (isReady) {
       loadObjects(false);
     }
-  }, [isReady, currentPrefix]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isReady, currentPrefix, selectedBucketName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const navigateToFolder = (prefix: string) => {
     setCurrentPrefix(prefix);
@@ -295,16 +358,16 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
   };
 
   const downloadFile = async (key: string, fileName: string) => {
-    if (!config?.mediaBucketName) return;
+    if (!selectedBucketName) return;
     if (!useBackendApi && !s3Client) return;
 
     try {
       let url: string;
       if (useBackendApi) {
-        url = await getS3DownloadUrl(config.mediaBucketName, key);
+        url = await getS3DownloadUrl(selectedBucketName, key);
       } else {
         const command = new GetObjectCommand({
-          Bucket: config.mediaBucketName,
+          Bucket: selectedBucketName,
           Key: key,
         });
         url = await getSignedUrl(s3Client!, command, { expiresIn: 3600 });
@@ -326,7 +389,7 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
   };
 
   const deleteObject = async (key: string, isFolder: boolean) => {
-    if (!config?.mediaBucketName) return;
+    if (!selectedBucketName) return;
     if (!useBackendApi && !s3Client) return;
 
     Modal.confirm({
@@ -338,7 +401,7 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
         try {
           if (useBackendApi) {
             // Backend handles recursive delete for folders (keys ending in '/') server-side
-            await deleteS3Object(config.mediaBucketName, key);
+            await deleteS3Object(selectedBucketName, key);
             messageApi.success(isFolder ? 'Folder deleted' : 'Deleted successfully');
           } else if (isFolder) {
             // For folders, we need to delete all objects with this prefix
@@ -348,7 +411,7 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
             do {
               // List all objects with this prefix
               const listCommand = new ListObjectsV2Command({
-                Bucket: config.mediaBucketName,
+                Bucket: selectedBucketName,
                 Prefix: key,
                 ContinuationToken: continuationToken,
               });
@@ -362,7 +425,7 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
 
                 if (objectsToDelete.length > 0) {
                   const deleteCommand = new DeleteObjectsCommand({
-                    Bucket: config.mediaBucketName,
+                    Bucket: selectedBucketName,
                     Delete: { Objects: objectsToDelete },
                   });
                   await s3Client!.send(deleteCommand);
@@ -377,7 +440,7 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
           } else {
             // For single files, just delete the object
             const command = new DeleteObjectCommand({
-              Bucket: config.mediaBucketName,
+              Bucket: selectedBucketName,
               Key: key,
             });
             await s3Client!.send(command);
@@ -393,16 +456,16 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
   };
 
   const createFolder = async () => {
-    if (!config?.mediaBucketName || !newFolderName.trim()) return;
+    if (!selectedBucketName || !newFolderName.trim()) return;
     if (!useBackendApi && !s3Client) return;
 
     try {
       const folderKey = `${currentPrefix}${newFolderName.trim()}/`;
       if (useBackendApi) {
-        await createS3Folder(config.mediaBucketName, folderKey);
+        await createS3Folder(selectedBucketName, folderKey);
       } else {
         const command = new PutObjectCommand({
-          Bucket: config.mediaBucketName,
+          Bucket: selectedBucketName,
           Key: folderKey,
           Body: '',
         });
@@ -424,7 +487,7 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
     relativePath: string,
     uploadId: string
   ): Promise<void> => {
-    if (!config?.mediaBucketName) {
+    if (!selectedBucketName) {
       throw new Error('Storage not configured');
     }
 
@@ -434,7 +497,7 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
       // Single-shot presigned PUT upload (supports files up to 5GB per S3 limits).
       // Note: unlike the Cognito-mode multipart upload below, this is not chunked, so very
       // large files (multi-GB) may be less resilient to network interruptions.
-      const uploadUrl = await getS3UploadUrl(config.mediaBucketName, key, file.type || 'application/octet-stream');
+      const uploadUrl = await getS3UploadUrl(selectedBucketName, key, file.type || 'application/octet-stream');
 
       await new Promise<void>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
@@ -468,7 +531,7 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
     const upload = new S3Upload({
       client: s3Client,
       params: {
-        Bucket: config.mediaBucketName,
+        Bucket: selectedBucketName,
         Key: key,
         Body: file,
         ContentType: file.type || 'application/octet-stream',
@@ -490,7 +553,7 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
 
   // Process upload queue
   const processUploadQueue = useCallback(async (files: { file: File; path: string }[]) => {
-    if (!config?.mediaBucketName || files.length === 0) return;
+    if (!selectedBucketName || files.length === 0) return;
     if (!useBackendApi && !s3Client) return;
 
     // Filter out files that are already being uploaded (deduplicate)
@@ -826,7 +889,24 @@ const BucketsAntd: React.FC<BucketsAntdProps> = ({
               title={
                 <Space>
                   <CloudUploadOutlined />
-                  <span>Media Bucket: {config?.mediaBucketName || 'Not configured'}</span>
+                  <span>Bucket:</span>
+                  <Select
+                    value={selectedBucketName || undefined}
+                    placeholder="Not configured"
+                    style={{ minWidth: 260 }}
+                    onChange={handleBucketChange}
+                    options={[
+                      ...(config?.mediaBucketName
+                        ? [{ value: config.mediaBucketName, label: `${config.mediaBucketName} (default)` }]
+                        : []),
+                      ...additionalBuckets
+                        .filter((b) => b.bucketName !== config?.mediaBucketName)
+                        .map((b) => ({
+                          value: b.bucketName,
+                          label: b.region ? `${b.label} (${b.bucketName}, ${b.region})` : `${b.label} (${b.bucketName})`,
+                        })),
+                    ]}
+                  />
                 </Space>
               }
               extra={

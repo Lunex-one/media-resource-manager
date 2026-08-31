@@ -15,6 +15,29 @@ const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
 const s3Client = new S3Client({ region: process.env.AWS_REGION });
 
+// Per-bucket S3 clients, cached across warm invocations. A client configured for this Lambda's
+// own region cannot reliably sign requests (or generate valid presigned URLs) against a bucket
+// that actually lives elsewhere - SigV4 signs for a specific region. Every bucket-scoped operation
+// below resolves the bucket's real region first, the same way createMountpointS3Storage does when
+// a storage resource is created.
+const regionalClients = new Map();
+
+async function getS3ClientForBucket(bucketName) {
+  if (regionalClients.has(bucketName)) {
+    return regionalClients.get(bucketName);
+  }
+  let region = process.env.AWS_REGION;
+  try {
+    const loc = await s3Client.send(new GetBucketLocationCommand({ Bucket: bucketName }));
+    region = loc.LocationConstraint || 'us-east-1';
+  } catch (error) {
+    console.warn(`Could not resolve region for bucket ${bucketName}, using Lambda's home region:`, error.message);
+  }
+  const client = region === process.env.AWS_REGION ? s3Client : new S3Client({ region });
+  regionalClients.set(bucketName, client);
+  return client;
+}
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
@@ -49,11 +72,12 @@ exports.handler = async (event) => {
 
     if (action === 'delete' && bucketName) {
       try {
+        const client = await getS3ClientForBucket(bucketName);
         const key = qs.key;
         const keysParam = qs.keys; // comma-separated for batch delete of specific files
         if (keysParam) {
           const objects = keysParam.split(',').filter(Boolean).map((k) => ({ Key: k }));
-          await s3Client.send(new DeleteObjectsCommand({
+          await client.send(new DeleteObjectsCommand({
             Bucket: bucketName,
             Delete: { Objects: objects }
           }));
@@ -62,7 +86,7 @@ exports.handler = async (event) => {
           let continuationToken;
           let deletedCount = 0;
           do {
-            const listResult = await s3Client.send(new ListObjectsV2Command({
+            const listResult = await client.send(new ListObjectsV2Command({
               Bucket: bucketName,
               Prefix: key,
               ContinuationToken: continuationToken
@@ -71,7 +95,7 @@ exports.handler = async (event) => {
               .filter((o) => o.Key)
               .map((o) => ({ Key: o.Key }));
             if (objectsToDelete.length > 0) {
-              await s3Client.send(new DeleteObjectsCommand({
+              await client.send(new DeleteObjectsCommand({
                 Bucket: bucketName,
                 Delete: { Objects: objectsToDelete }
               }));
@@ -81,7 +105,7 @@ exports.handler = async (event) => {
           } while (continuationToken);
           return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ success: true, deletedCount }) };
         } else if (key) {
-          await s3Client.send(new DeleteObjectCommand({ Bucket: bucketName, Key: key }));
+          await client.send(new DeleteObjectCommand({ Bucket: bucketName, Key: key }));
         } else {
           return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ success: false, error: 'Missing key or keys parameter' }) };
         }
@@ -94,6 +118,7 @@ exports.handler = async (event) => {
 
     if (action === 'createFolder' && bucketName) {
       try {
+        const client = await getS3ClientForBucket(bucketName);
         let key = qs.key;
         if (!key) {
           return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ success: false, error: 'Missing key parameter' }) };
@@ -101,7 +126,7 @@ exports.handler = async (event) => {
         if (!key.endsWith('/')) {
           key = key + '/';
         }
-        await s3Client.send(new PutObjectCommand({ Bucket: bucketName, Key: key, Body: '' }));
+        await client.send(new PutObjectCommand({ Bucket: bucketName, Key: key, Body: '' }));
         return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ success: true, key }) };
       } catch (error) {
         console.error('Error creating folder:', error);
@@ -111,12 +136,13 @@ exports.handler = async (event) => {
 
     if (action === 'download' && bucketName) {
       try {
+        const client = await getS3ClientForBucket(bucketName);
         const key = qs.key;
         if (!key) {
           return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ success: false, error: 'Missing key parameter' }) };
         }
         const url = await getSignedUrl(
-          s3Client,
+          client,
           new GetObjectCommand({ Bucket: bucketName, Key: key }),
           { expiresIn: 3600 }
         );
@@ -129,13 +155,14 @@ exports.handler = async (event) => {
 
     if (action === 'uploadUrl' && bucketName) {
       try {
+        const client = await getS3ClientForBucket(bucketName);
         const key = qs.key;
         const contentType = qs.contentType || 'application/octet-stream';
         if (!key) {
           return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ success: false, error: 'Missing key parameter' }) };
         }
         const url = await getSignedUrl(
-          s3Client,
+          client,
           new PutObjectCommand({ Bucket: bucketName, Key: key, ContentType: contentType }),
           { expiresIn: 3600 }
         );
@@ -149,8 +176,9 @@ exports.handler = async (event) => {
     // Handle /storage/s3-buckets?bucket=X&prefix=Y - list objects/folders inside a specific bucket
     if (bucketName) {
       try {
+        const client = await getS3ClientForBucket(bucketName);
         const prefix = qs.prefix || '';
-        const listResult = await s3Client.send(new ListObjectsV2Command({
+        const listResult = await client.send(new ListObjectsV2Command({
           Bucket: bucketName,
           Prefix: prefix,
           Delimiter: '/'
