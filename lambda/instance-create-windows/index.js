@@ -74,7 +74,8 @@ async function generateHostname() {
 exports.handler = async (event) => {
     console.log('Creating EC2 instance:', JSON.stringify(event, null, 2));
 
-    const { amiId, instanceType, assignedUserId, domainId, retrySubnetIndex = 0, rootVolumeSize, pipelineId, acronym, region, regionalConfig, externalRef } = event;
+    const { amiId, instanceType, assignedUserId, domainId, retrySubnetIndex = 0, rootVolumeSize, pipelineId, acronym, region, regionalConfig,
+            externalRef, constellationId, projectId } = event;
     
     // Determine target region and configuration
     const targetRegion = region || process.env.AWS_REGION;
@@ -177,6 +178,19 @@ exports.handler = async (event) => {
     const paddedNumber = hostnameNumber ? hostnameNumber.toString().padStart(4, '0') : Date.now().toString().slice(-4);
     const workstationName = `${imageBaseName}-${paddedNumber}`;
 
+    // The three references a caller may attach to a machine: `constellationId` is the identity a
+    // Constellation plan resource is known by, `projectId` the project it was booked for, and
+    // `externalRef` a free-form reference the facility can edit afterwards. All three are set on
+    // the RunInstances call rather than added later, so they are atomic with the resources in a way
+    // the DynamoDB record written below is not. Each is omitted entirely when absent, never tagged
+    // with an empty value. ConstellationId and ProjectId are also what a per-project cost query
+    // groups by, once they are activated as cost allocation tags in the payer account.
+    const referenceTags = [
+        ...(constellationId ? [{ Key: 'ConstellationId', Value: constellationId }] : []),
+        ...(projectId ? [{ Key: 'ProjectId', Value: projectId }] : []),
+        ...(externalRef ? [{ Key: 'ExternalRef', Value: externalRef }] : [])
+    ];
+
     const runParams = {
         LaunchTemplate: {
             LaunchTemplateId: launchTemplateId,
@@ -195,19 +209,30 @@ exports.handler = async (event) => {
                 DeleteOnTermination: true
             }
         }],
-        TagSpecifications: [{
-            ResourceType: 'instance',
-            Tags: [
-                { Key: 'Name', Value: workstationName },
-                ...(assignedUserId ? [{ Key: 'AssignedUser', Value: assignedUserId }] : []),
-                { Key: 'ManagedBy', Value: process.env.PASCAL_CASE_NAME || 'WorkstationManager' },
-                { Key: 'Region', Value: targetRegion },
-                ...(hostname ? [{ Key: 'Hostname', Value: hostname }] : []),
-                // The caller's own reference, so a machine stays findable through EC2 even if its
-                // record is lost. Omitted entirely when absent, never tagged with an empty value.
-                ...(externalRef ? [{ Key: 'ExternalRef', Value: externalRef }] : [])
-            ]
-        }]
+        TagSpecifications: [
+            {
+                ResourceType: 'instance',
+                Tags: [
+                    { Key: 'Name', Value: workstationName },
+                    ...(assignedUserId ? [{ Key: 'AssignedUser', Value: assignedUserId }] : []),
+                    { Key: 'ManagedBy', Value: process.env.PASCAL_CASE_NAME || 'WorkstationManager' },
+                    { Key: 'Region', Value: targetRegion },
+                    ...(hostname ? [{ Key: 'Hostname', Value: hostname }] : []),
+                    // A machine stays findable through EC2 even if its record is lost.
+                    ...referenceTags
+                ]
+            },
+            {
+                // The root volume is a billing line of its own, so the references have to reach it
+                // too or a per-project cost query silently misses every disk.
+                ResourceType: 'volume',
+                Tags: [
+                    { Key: 'Name', Value: `${workstationName}-root` },
+                    { Key: 'ManagedBy', Value: process.env.PASCAL_CASE_NAME || 'WorkstationManager' },
+                    ...referenceTags
+                ]
+            }
+        ]
     };
 
     try {
@@ -224,6 +249,8 @@ exports.handler = async (event) => {
             ...(assignedUserId && { assignedUserId }),
             // Same rule, same reason: omit rather than store '' so the attribute stays
             // indexable, and "nobody set this" stays distinguishable from "set to nothing".
+            ...(constellationId && { constellationId }),
+            ...(projectId && { projectId }),
             ...(externalRef && { externalRef }),
             amiId: effectiveAmiId,
             sourceAmiId: amiId, // Keep track of original AMI for reference

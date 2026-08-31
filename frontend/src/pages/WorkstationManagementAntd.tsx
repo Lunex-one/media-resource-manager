@@ -50,6 +50,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import type { MenuProps } from 'antd';
 import AppLayoutAntd from '../components/AppLayoutAntd';
+import EditableRefCell from '../components/EditableRefCell';
 import { getAuthToken, handleAuthError } from '../utils/auth';
 import { apiCall } from '../utils/api';
 import { useInstanceTypeCatalog } from '../hooks/useInstanceTypeCatalog';
@@ -93,6 +94,13 @@ interface Workstation {
   storageConfig?: any;
   keepAliveUntil?: string;
   keepAliveRequestedBy?: string;
+  // The three references a machine can carry. `constellationId` is the identity a Constellation
+  // plan resource is known by and `projectId` the project it was booked for — both are set when
+  // Constellation asks for the machine and are read-only here. `externalRef` is the facility's own
+  // free-form reference and is the one this page edits.
+  constellationId?: string;
+  projectId?: string;
+  externalRef?: string;
 }
 
 const instanceStatusOptions = [
@@ -878,6 +886,28 @@ const WorkstationManagementAntd: React.FC<WorkstationManagementAntdProps> = ({
     } finally {
       setSavingName(false);
       setEditingNameId(null);
+    }
+  };
+
+  // An empty value clears the reference: the API removes the attribute rather than storing '',
+  // and it drops the matching EC2 tag from the instance and its volumes at the same time.
+  const handleUpdateExternalRef = async (instanceId: string, externalRef: string) => {
+    try {
+      const token = getAuthToken();
+      if (!token) throw new Error('No current user');
+
+      const response = await apiCall(`/workstations/${instanceId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ externalRef }),
+      });
+
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await fetchData();
+      setAlert({ type: 'success', message: externalRef ? 'External reference updated' : 'External reference cleared' });
+    } catch (error) {
+      console.error('Error updating external reference:', error);
+      setAlert({ type: 'error', message: 'Failed to update external reference' });
     }
   };
 
@@ -1809,6 +1839,43 @@ const WorkstationManagementAntd: React.FC<WorkstationManagementAntdProps> = ({
       sorter: (a, b) => (a.region || '').localeCompare(b.region || ''),
       sortOrder: sortedInfo?.columnKey === 'region' ? sortedInfo.order : null,
       render: (region) => region || 'Primary',
+    },
+    {
+      title: 'Constellation ID',
+      dataIndex: 'constellationId',
+      key: 'constellationId',
+      width: 160,
+      ellipsis: true,
+      sorter: (a, b) => (a.constellationId || '').localeCompare(b.constellationId || ''),
+      sortOrder: sortedInfo?.columnKey === 'constellationId' ? sortedInfo.order : null,
+      // Read-only: this is the identity a plan resource is known by, and the value
+      // GET /workstations/orphans searches for, so it is not something to retype in a table.
+      render: (value) => (value ? <Tooltip title={value}><Text style={{ fontSize: 12 }}>{value}</Text></Tooltip> : <Text type="secondary">—</Text>),
+    },
+    {
+      title: 'Project ID',
+      dataIndex: 'projectId',
+      key: 'projectId',
+      width: 160,
+      ellipsis: true,
+      sorter: (a, b) => (a.projectId || '').localeCompare(b.projectId || ''),
+      sortOrder: sortedInfo?.columnKey === 'projectId' ? sortedInfo.order : null,
+      render: (value) => (value ? <Tooltip title={value}><Text style={{ fontSize: 12 }}>{value}</Text></Tooltip> : <Text type="secondary">—</Text>),
+    },
+    {
+      title: 'External Ref',
+      dataIndex: 'externalRef',
+      key: 'externalRef',
+      width: 200,
+      sorter: (a, b) => (a.externalRef || '').localeCompare(b.externalRef || ''),
+      sortOrder: sortedInfo?.columnKey === 'externalRef' ? sortedInfo.order : null,
+      render: (_, record) => (
+        <EditableRefCell
+          value={record.externalRef}
+          editable={isAdmin}
+          onSave={(next) => handleUpdateExternalRef(record.instanceId, next)}
+        />
+      ),
     },
     {
       title: 'Created',

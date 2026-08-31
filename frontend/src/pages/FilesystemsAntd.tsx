@@ -35,6 +35,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import type { MenuProps } from 'antd';
 import AppLayoutAntd from '../components/AppLayoutAntd';
+import EditableRefCell from '../components/EditableRefCell';
 import { getAuthToken } from '../utils/auth';
 import { apiCall } from '../utils/api';
 import { listStorageS3Buckets, getStorageConfig, S3Bucket, StorageConfig } from '../utils/storageApi';
@@ -57,6 +58,13 @@ interface StorageResource {
   fsxFileSystemId?: string;
   storageGatewayId?: string;
   systemDirectorInstanceId?: string;
+  // The three references a filesystem can carry. `constellationId` is the identity a Constellation
+  // plan resource is known by and `projectId` the project it was booked for — both are set when
+  // Constellation asks for the filesystem and are read-only here. `externalRef` is the facility's
+  // own free-form reference and is the one this page edits.
+  constellationId?: string;
+  projectId?: string;
+  externalRef?: string;
 }
 
 interface RegionalHub {
@@ -293,7 +301,12 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ name: values.name, description: values.description }),
+        // externalRef goes as '' when the field was emptied, which the API reads as "remove it".
+        body: JSON.stringify({
+          name: values.name,
+          description: values.description,
+          externalRef: values.externalRef ?? '',
+        }),
       });
 
       if (response.ok) {
@@ -308,6 +321,33 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
       }
     } catch (error: any) {
       setAlert({ type: 'error', message: error.message || 'Failed to update storage' });
+    }
+  };
+
+  // The list view's own edit path for one field. An empty value clears the reference: the API
+  // removes the attribute rather than storing ''.
+  const handleUpdateExternalRef = async (storageId: string, externalRef: string) => {
+    try {
+      const token = getAuthToken();
+      if (!token) throw new Error('No current user');
+
+      const response = await apiCall(`storage/${storageId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ externalRef }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP ${response.status}`);
+      }
+      setAlert({ type: 'success', message: externalRef ? 'External reference updated' : 'External reference cleared' });
+      fetchData();
+    } catch (error: any) {
+      setAlert({ type: 'error', message: error.message || 'Failed to update external reference' });
     }
   };
 
@@ -344,7 +384,11 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
       return;
     }
     setEditingResource(resource);
-    editForm.setFieldsValue({ name: resource.name, description: resource.description || '' });
+    editForm.setFieldsValue({
+      name: resource.name,
+      description: resource.description || '',
+      externalRef: resource.externalRef || '',
+    });
     setShowEditModal(true);
   };
 
@@ -476,6 +520,42 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
       sorter: (a, b) => (a.throughput || 0) - (b.throughput || 0),
       sortOrder: sortedInfo?.columnKey === 'throughput' ? sortedInfo.order : null,
       render: (val) => val?.toLocaleString() || '-',
+    },
+    {
+      title: 'Constellation ID',
+      dataIndex: 'constellationId',
+      key: 'constellationId',
+      width: 160,
+      ellipsis: true,
+      sorter: (a, b) => (a.constellationId || '').localeCompare(b.constellationId || ''),
+      sortOrder: sortedInfo?.columnKey === 'constellationId' ? sortedInfo.order : null,
+      // Read-only: this is the identity a plan resource is known by, not something to retype.
+      render: (value) => (value ? <Tooltip title={value}><Text style={{ fontSize: 12 }}>{value}</Text></Tooltip> : <Text type="secondary">—</Text>),
+    },
+    {
+      title: 'Project ID',
+      dataIndex: 'projectId',
+      key: 'projectId',
+      width: 160,
+      ellipsis: true,
+      sorter: (a, b) => (a.projectId || '').localeCompare(b.projectId || ''),
+      sortOrder: sortedInfo?.columnKey === 'projectId' ? sortedInfo.order : null,
+      render: (value) => (value ? <Tooltip title={value}><Text style={{ fontSize: 12 }}>{value}</Text></Tooltip> : <Text type="secondary">—</Text>),
+    },
+    {
+      title: 'External Ref',
+      dataIndex: 'externalRef',
+      key: 'externalRef',
+      width: 200,
+      sorter: (a, b) => (a.externalRef || '').localeCompare(b.externalRef || ''),
+      sortOrder: sortedInfo?.columnKey === 'externalRef' ? sortedInfo.order : null,
+      render: (_, record) => (
+        <EditableRefCell
+          value={record.externalRef}
+          editable={isAdmin}
+          onSave={(next) => handleUpdateExternalRef(record.storageId, next)}
+        />
+      ),
     },
     {
       title: 'Created',
@@ -947,6 +1027,13 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
             </Form.Item>
             <Form.Item name="description" label="Description">
               <TextArea rows={2} />
+            </Form.Item>
+            <Form.Item
+              name="externalRef"
+              label="External Reference"
+              extra="The facility's own reference for this filesystem. Leave empty for none."
+            >
+              <Input />
             </Form.Item>
           </Form>
         </Modal>

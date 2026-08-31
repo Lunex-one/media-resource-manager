@@ -17,6 +17,7 @@ function URL.
 - [Authentication](#authentication)
 - [Calling the API](#calling-the-api)
 - [Conventions](#conventions)
+  - [References: constellationId, projectId, externalRef](#references-constellationid-projectid-and-externalref)
 - [Routes](#routes)
   - [Auth](#auth) · [Workstations](#workstations) · [Settings and catalog](#settings-and-catalog)
   - [Users and groups](#users-and-groups) · [Images and pipelines](#images-and-pipelines)
@@ -317,6 +318,39 @@ returns an empty list even though the account exists.
 `scripts/mrm-api.sh` defaults to an admin token, so its lists match the administrator view in the
 console; use `--as <user>` to reproduce a specific non-admin user's narrower view.
 
+### References: `constellationId`, `projectId` and `externalRef`
+
+Workstations and storage resources each carry three optional references. All three are accepted on
+create, returned on every read, and settable on `PUT`; all three are empty for anything created in
+MRM's own UI. Sending `""` for one removes it rather than storing an empty value, so "nobody set
+this" stays distinguishable from "set to nothing".
+
+| Field | EC2 / stack tag | What it is |
+|---|---|---|
+| `constellationId` | `ConstellationId` | The identity a Constellation plan resource is known by. `GET /workstations/orphans` searches this tag, so it is the field crash recovery depends on. |
+| `projectId` | `ProjectId` | The Constellation project the resource was booked for. |
+| `externalRef` | `ExternalRef` | Free-form, the facility's own, and editable from MRM's list views. Nothing depends on it, precisely because it can change. |
+
+**Where the tags land.** A workstation is tagged in the same `RunInstances` call that launches it —
+on the instance *and* its root volume, because EBS is billed separately and an untagged disk is a
+project's cost quietly going missing. A volume added later through
+`POST /workstations/volumes/add` copies the three from the workstation's record. A storage resource
+gets them as CloudFormation stack tags, which CloudFormation applies to every resource in the stack
+that supports tagging — the FSx file system, its SVM and volume, the security group, a NEXIS
+instance. `mountpoint-s3` is recorded only: it creates no AWS resource of its own.
+
+Two deliberate gaps. **macOS dedicated hosts carry none of them**: a host is allocated only when no
+free one exists, is reused by whatever workstation needs it next, and outlives any single instance,
+so a project id on a host would be a confident wrong answer about who owes for the host hours — the
+part of a macOS workstation that is actually billed. And **editing a storage reference changes the
+record, not the tags**, since stack tags are fixed when the stack is created.
+
+**Tagging alone produces no billing breakdown.** A user-defined tag key does nothing on the bill
+until it is activated as a cost allocation tag in the payer account (Billing → Cost Allocation Tags,
+or `ce:UpdateCostAllocationTagsStatus`). Activation is not retroactive — it covers only usage
+recorded afterwards — and values take about a day to appear in Cost Explorer. Nothing in this
+repository does that; it is a step on the AWS side, once per payer account.
+
 ---
 
 ## Routes
@@ -350,7 +384,9 @@ behave differently.
 | `GET` | `/workstations` | — | Filtered by caller unless admin |
 | `POST` | `/workstations` | see below | Single object, or `{workstations: [...]}` for batch |
 | `GET` | `/workstations/{id}` | — | `id` is the EC2 instance id |
-| `PUT` | `/workstations/{id}` | partial object | |
+| `GET` | `/workstations/orphans` | — | `?constellationId=…` required, `?region=…` optional; see below |
+| `GET` | `/workstations/executions` | — | `?executionArn=…` required; the state of one create |
+| `PUT` | `/workstations/{id}` | partial object | Reads `assignedUserId`, `workstationName`, `storageConfig` and the three references; ignores everything else |
 | `DELETE` | `/workstations/{id}` | — | Terminates the instance |
 | `POST` | `/workstations/start` | `{instanceId}` | → `{message, executionArn}`; starts a Step Functions workflow |
 | `POST` | `/workstations/stop` | `{instanceId}` | |
@@ -375,14 +411,27 @@ behave differently.
   "joinDomain": true,
   "pipelineId": "…",
   "region": "us-east-1",
-  "acronym": "MRM"
+  "acronym": "MRM",
+  "constellationId": "…",
+  "projectId": "…",
+  "externalRef": "…"
 }
 ```
 
 `joinDomain` defaults to `true` and applies to Windows only. `region` targets a satellite
-regional hub; an unknown region returns `400`. Volume operations return `202` immediately because
-the volume manager can run longer than API Gateway's 30-second integration timeout — poll
-`GET /workstations/{id}` for the result.
+regional hub; an unknown region returns `400`. The last three are optional references — see
+[References](#references-constellationid-projectid-and-externalref) for what each means and where
+its tag lands. Volume operations return `202` immediately because the volume manager can run longer
+than API Gateway's 30-second integration timeout — poll `GET /workstations/{id}` for the result.
+
+**A create answers before the machine exists.** The response carries an `executionArn` and no
+instance id, because provisioning runs as a Step Functions execution. `GET /workstations/executions`
+reports how that execution is going. A terminal status does not settle whether an instance leaked,
+though: the instance id enters the execution history only when the create function returns, and the
+window that leaks one is exactly the window where it never does.
+`GET /workstations/orphans?constellationId=…` is what answers that — it lists instances carrying the
+tag that MRM holds no record of, alongside the ones it does. Terminated instances are excluded
+deliberately: one is evidence a build happened, not something to adopt or clean up.
 
 **Workstation object** (fields as returned):
 
@@ -393,9 +442,13 @@ the volume manager can run longer than API Gateway's 30-second integration timeo
   "dcvStatus": "stopped", "dcvSessionId": null, "sessionState": "NO_SESSION",
   "connectionCount": 0, "assignedUserId": "group-…", "amiId": "ami-…",
   "sourceAmiId": "ami-…", "subnetId": "subnet-…", "privateIpAddress": "10.100.1.193",
-  "createdAt": "2026-08-27T02:56:54.700Z", "instanceStartTime": "2026-08-27T02:56:54.700Z"
+  "createdAt": "2026-08-27T02:56:54.700Z", "instanceStartTime": "2026-08-27T02:56:54.700Z",
+  "constellationId": "…", "projectId": "…", "externalRef": "…"
 }
 ```
+
+The three references are absent from the object entirely when nothing set them, rather than present
+and empty.
 
 ### Settings and catalog
 
@@ -514,14 +567,15 @@ agent is disabled; `429` carries `{limitType, currentUsage, limit}`.
 
 ### Storage
 
-FSx for NetApp ONTAP, FSx for Windows File Server, and Mountpoint-for-S3 volumes.
+FSx for NetApp ONTAP, FSx for Windows File Server, Mountpoint-for-S3 volumes, and Avid NEXIS
+System Director.
 
 | Method | Path | Body | Notes |
 |---|---|---|---|
 | `GET` | `/storage` | — | |
 | `POST` | `/storage` | see below | `201` on success |
 | `GET` | `/storage/{storageId}` | — | |
-| `PUT` | `/storage/{storageId}` | partial | |
+| `PUT` | `/storage/{storageId}` | partial | Reads `name`, `status`, `description`, `configuration` and the three references |
 | `DELETE` | `/storage/{storageId}` | — | |
 | `POST` | `/storage/mount` | `{action, instanceId, storageId}` | Mountpoint-S3 |
 | `POST` | `/storage/nfs-mount` | `{action, instanceId, storageId}` | FSx ONTAP NFS |
@@ -534,15 +588,23 @@ FSx for NetApp ONTAP, FSx for Windows File Server, and Mountpoint-for-S3 volumes
   "type": "fsx-ontap",
   "description": "…",
   "region": "us-east-1",
+  "constellationId": "…",
+  "projectId": "…",
+  "externalRef": "…",
   "configuration": { }
 }
 ```
 
-`type` is one of `fsx-windows` (the default), `fsx-ontap`, `mountpoint-s3`; `configuration` is
-type-specific. `name` and `configuration` are required — otherwise
+`type` is one of `fsx-windows` (the default), `fsx-ontap`, `mountpoint-s3`, `nexis`;
+`configuration` is type-specific. `name` and `configuration` are required — otherwise
 `400 {"success": false, "error": "Name and configuration are required"}`. Provisioning runs as a
 nested CloudFormation stack driven by Step Functions, so a `201` means *accepted*: poll
 `GET /storage/{storageId}` until `status` settles.
+
+The three references are optional and sit at the top level of the body, not inside
+`configuration`. They become CloudFormation stack tags, so they reach the real AWS resources — see
+[References](#references-constellationid-projectid-and-externalref), including why editing one later
+changes the record and not those tags.
 
 The mount routes take `action` of `mount` or `unmount`.
 
@@ -707,8 +769,9 @@ protected route — `GET /instance-types/catalog` — and look at the status.
 
 **Two Lambdas share the `/workstations` namespace.** `/workstations/start` and `/stop` are on
 `mrm-workstation-manager`; `/workstations/keep-alive` and everything under `/settings` are on
-`mrm-workstation-api`. Both implement overlapping routers, so tracing a request in CloudWatch
-means knowing which function actually received it.
+`mrm-workstation-api`. Tracing a request in CloudWatch means knowing which function received it.
+The two routers overlapped until 2026-08-31 — `mrm-workstation-api` carried a second, unreachable
+implementation of the whole workstation lifecycle, which has been removed.
 
 **`POST /users` is polymorphic.** Three unrelated operations dispatch off the body shape. A body
 missing both `userIds`/`groupIds` and the `removeFromGroups` action is treated as a user
@@ -732,14 +795,16 @@ aws apigateway get-resources --rest-api-id "$MRM_API_ID" --limit 500 \
   --query 'items[].[path,resourceMethods]' --output json
 ```
 
-An OpenAPI 3 skeleton can be exported straight from the deployed API:
+An OpenAPI 3 skeleton can be exported straight from the deployed API, and
+[`openapi/build.py`](../openapi/build.py) does that and merges it with the hand-written part:
 
 ```bash
-aws apigateway get-export --rest-api-id "$MRM_API_ID" --stage-name prod \
-  --export-type oas30 --accepts application/json openapi/mrm.json
+python3 openapi/build.py              # re-export from AWS, then merge
+python3 openapi/build.py --no-fetch   # merge using the cached export
 ```
 
-Because every route is a Lambda proxy integration with no API Gateway models, that export
-carries paths and security schemes but **no request or response schemas** — those are maintained
-by hand in [`openapi/mrm.json`](../openapi/mrm.json). Re-exporting overwrites them, so a refresh
-means re-merging.
+Because every route is a Lambda proxy integration with no API Gateway models, that export carries
+paths and security schemes but **no request or response schemas**. Those live in
+[`openapi/overlay.json`](../openapi/overlay.json), and that is the file to edit —
+[`openapi/mrm.json`](../openapi/mrm.json) is the merge of the two and a re-export overwrites it, so
+a hand edit there is lost. [`openapi/README.md`](../openapi/README.md) has the details.

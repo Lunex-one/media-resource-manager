@@ -3,7 +3,7 @@
 
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, ScanCommand, PutCommand, UpdateCommand, DeleteCommand, GetCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
-const { EC2Client, TerminateInstancesCommand, DescribeInstancesCommand, StopInstancesCommand, RebootInstancesCommand, ModifyInstanceAttributeCommand, DescribeVolumesCommand, DescribeImagesCommand, CreateTagsCommand } = require('@aws-sdk/client-ec2');
+const { EC2Client, TerminateInstancesCommand, DescribeInstancesCommand, StopInstancesCommand, RebootInstancesCommand, ModifyInstanceAttributeCommand, DescribeVolumesCommand, DescribeImagesCommand, CreateTagsCommand, DeleteTagsCommand } = require('@aws-sdk/client-ec2');
 const { SFNClient, StartExecutionCommand, DescribeExecutionCommand } = require('@aws-sdk/client-sfn');
 const { SSMClient, GetParameterCommand } = require('@aws-sdk/client-ssm');
 const { DirectoryServiceClient, DescribeDirectoriesCommand } = require('@aws-sdk/client-directory-service');
@@ -854,7 +854,8 @@ async function getWorkstationDetails(instanceId, event) {
 }
 
 async function createWorkstation(data) {
-  const { amiId, instanceType, assignedUserId, domainId, rootVolumeSize, pipelineId, acronym, joinDomain, platform, region, externalRef } = data;
+  const { amiId, instanceType, assignedUserId, domainId, rootVolumeSize, pipelineId, acronym, joinDomain, platform, region,
+          externalRef, constellationId, projectId } = data;
   
   // Default joinDomain to true for backward compatibility (only applies to Windows)
   const shouldJoinDomain = joinDomain !== false;
@@ -1042,10 +1043,18 @@ async function createWorkstation(data) {
       joinDomain: platformLower === 'windows' ? shouldJoinDomain : false, // Only Windows supports domain join
       platform: detectedPlatform,
       region: targetRegion,
-      // An opaque reference supplied by whoever asked for this workstation, carried through
-      // the state machine and written onto the record - see instance-create-*/index.js and
-      // GET /workstations/orphans for why this exists (creation is asynchronous, and this
-      // is what lets an automated caller recognize the machine it asked for).
+      // Three references supplied by whoever asked for this workstation, carried through the
+      // state machine, tagged onto the instance and its root volume, and written onto the record -
+      // see instance-create-*/index.js for the tagging.
+      //
+      // `constellationId` is the identity a Constellation plan resource is known by, and it is what
+      // GET /workstations/orphans searches for: creation is asynchronous, so an automated caller
+      // needs some way to recognize the machine it asked for even when the record was never
+      // written. `projectId` says which project the machine was booked for, and both reach the bill
+      // once activated as cost allocation tags. `externalRef` is free-form and the facility's own,
+      // editable afterwards, which is exactly why recovery does not depend on it.
+      ...(constellationId && { constellationId }),
+      ...(projectId && { projectId }),
       ...(externalRef && { externalRef }),
       // Include regional config for satellite regions
       ...(regionalConfig && {
@@ -1113,14 +1122,43 @@ async function updateWorkstation(instanceId, updateData) {
       updateExpression.push('storageConfig = :storageConfig');
       expressionAttributeValues[':storageConfig'] = updateData.storageConfig;
     }
+
+    // The three references, under the same rule the create path writes them: a value sets the
+    // attribute, an empty one removes it, so the record keeps saying "nobody set this" rather than
+    // "set to nothing". A change has to reach the EC2 tags as well - they are what
+    // GET /workstations/orphans searches and what a per-project cost query groups by - so the tag
+    // work is collected here and applied once the record is written.
+    const REFERENCE_TAG_KEYS = {
+      constellationId: 'ConstellationId',
+      projectId: 'ProjectId',
+      externalRef: 'ExternalRef',
+    };
+    const tagsToSet = [];
+    const tagKeysToClear = [];
+
+    for (const [field, tagKey] of Object.entries(REFERENCE_TAG_KEYS)) {
+      if (updateData[field] === undefined) continue;
+      if (updateData[field] === '' || updateData[field] === null) {
+        removeExpression.push(field);
+        tagKeysToClear.push(tagKey);
+      } else {
+        updateExpression.push(`${field} = :${field}`);
+        expressionAttributeValues[`:${field}`] = updateData[field];
+        // EC2 tag values are strings; the record keeps whatever the caller sent.
+        tagsToSet.push({ Key: tagKey, Value: String(updateData[field]) });
+      }
+    }
     
     if (updateData.workstationName !== undefined) {
       updateExpression.push('workstationName = :workstationName');
       expressionAttributeValues[':workstationName'] = updateData.workstationName;
       
-      // Update EC2 Name tag
+      // Update EC2 Name tag, in whichever region the machine is actually in - this used the home
+      // region's client until 2026-08-31, so renaming a workstation built into a satellite regional
+      // hub changed the record and silently left the tag behind.
       try {
-        await ec2Client.send(new CreateTagsCommand({
+        const { ec2 } = await ec2ForWorkstation(instanceId);
+        await ec2.send(new CreateTagsCommand({
           Resources: [instanceId],
           Tags: [{ Key: 'Name', Value: updateData.workstationName }],
         }));
@@ -1158,6 +1196,10 @@ async function updateWorkstation(instanceId, updateData) {
     }
     
     await dynamodb.send(new UpdateCommand(updateParams));
+
+    if (tagsToSet.length > 0 || tagKeysToClear.length > 0) {
+      await syncReferenceTags(instanceId, tagsToSet, tagKeysToClear);
+    }
     
     // If storage config was updated, trigger the appropriate mount manager based on platform
     if (updateData.storageConfig !== undefined) {
@@ -1235,6 +1277,58 @@ async function updateWorkstation(instanceId, updateData) {
       headers: { 'Content-Type': 'application/json', ...corsHeaders },
       body: JSON.stringify({ error: 'Failed to update workstation' })
     };
+  }
+}
+
+/**
+ * An EC2 client for the region a workstation is actually in, and that region's name.
+ *
+ * A machine built into a satellite regional hub is invisible to this Lambda's own client, so
+ * anything that tags or describes an existing instance has to read the region off the record first.
+ */
+async function ec2ForWorkstation(instanceId) {
+  const record = await dynamodb.send(new GetCommand({
+    TableName: process.env.WORKSTATION_TABLE_NAME,
+    Key: { instanceId }
+  }));
+  const region = record.Item?.region || process.env.AWS_REGION;
+  return {
+    ec2: region !== process.env.AWS_REGION ? new EC2Client({ region }) : ec2Client,
+    region
+  };
+}
+
+/**
+ * Put the reference tags on an existing instance and on the volumes attached to it.
+ *
+ * Best-effort on purpose. The record is already written by the time this runs, so a tag that failed
+ * to move leaves a cost report that is wrong rather than a workstation that is broken, and failing
+ * the whole update would be the worse answer. The volumes are included because EBS is billed
+ * separately from the instance: tagging only the instance would split one project's cost across a
+ * tagged half and an untagged one.
+ */
+async function syncReferenceTags(instanceId, tagsToSet, tagKeysToClear) {
+  try {
+    const { ec2, region } = await ec2ForWorkstation(instanceId);
+
+    const described = await ec2.send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }));
+    const volumeIds = (described.Reservations?.[0]?.Instances?.[0]?.BlockDeviceMappings || [])
+      .map(mapping => mapping.Ebs?.VolumeId)
+      .filter(Boolean);
+    const resources = [instanceId, ...volumeIds];
+
+    if (tagsToSet.length > 0) {
+      await ec2.send(new CreateTagsCommand({ Resources: resources, Tags: tagsToSet }));
+    }
+    if (tagKeysToClear.length > 0) {
+      await ec2.send(new DeleteTagsCommand({
+        Resources: resources,
+        Tags: tagKeysToClear.map(Key => ({ Key }))
+      }));
+    }
+    console.log(`Reference tags updated on ${resources.join(', ')} in ${region}`);
+  } catch (error) {
+    console.warn('Failed to update reference tags for instance', instanceId + ':', error.message);
   }
 }
 
@@ -1562,10 +1656,9 @@ async function invokeVolumeManager(path, data) {
 }
 
 async function getExecutionStatus(event) {
-  // Report the state of one workstation-creation execution. POST /workstations answers 200
-  // with an executionArn and no instanceId if the caller supplied no externalRef, and nothing
-  // stores that ARN elsewhere - so a caller that kept it has, until now, had no way to ask
-  // what became of the work.
+  // Report the state of one workstation-creation execution. POST /workstations answers 200 with an
+  // executionArn and no instanceId, and nothing stores that ARN elsewhere - so a caller that kept
+  // it has, until now, had no way to ask what became of the work.
   //
   // RUNNING means the build is still going, so a caller can wait with certainty instead of
   // inventing a timeout; a terminal status means it is over. This does NOT settle whether an
@@ -1629,18 +1722,23 @@ function parseExecutionOutput(output) {
 }
 
 async function findOrphans(event) {
-  // Find instances carrying a caller's ExternalRef tag, and say which of them MRM has no
+  // Find instances carrying a caller's ConstellationId tag, and say which of them MRM has no
   // record of. instance-create-*/index.js calls RunInstances and writes its DynamoDB record
   // afterwards, so anything that kills the function in between leaves a running instance
   // GET /workstations can never show, because that endpoint scans the table and there is no
   // row. The instance is still tagged, since tags are set on the RunInstances call itself and
   // are therefore atomic with the instance in a way the record is not.
-  const externalRef = event.queryStringParameters?.externalRef;
-  if (!externalRef) {
+  //
+  // This searched the ExternalRef tag until 2026-08-31. It searches ConstellationId now because
+  // that is the identity a plan resource is known by, while externalRef became a free-form field
+  // the facility edits from MRM's own list views - and recovery must not depend on a value somebody
+  // can change out from under it.
+  const constellationId = event.queryStringParameters?.constellationId;
+  if (!constellationId) {
     return {
       statusCode: 400,
       headers: { 'Content-Type': 'application/json', ...corsHeaders },
-      body: JSON.stringify({ error: 'externalRef query parameter is required' })
+      body: JSON.stringify({ error: 'constellationId query parameter is required' })
     };
   }
 
@@ -1652,7 +1750,7 @@ async function findOrphans(event) {
   try {
     const result = await client.send(new DescribeInstancesCommand({
       Filters: [
-        { Name: 'tag:ExternalRef', Values: [externalRef] },
+        { Name: 'tag:ConstellationId', Values: [constellationId] },
         // Terminated instances are excluded deliberately - one is evidence a build happened,
         // not something a caller can adopt or must clean up.
         { Name: 'instance-state-name', Values: ['pending', 'running', 'shutting-down', 'stopping', 'stopped'] }
@@ -1686,7 +1784,7 @@ async function findOrphans(event) {
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json', ...corsHeaders },
-      body: JSON.stringify({ externalRef, region: region || process.env.AWS_REGION, orphans, tracked })
+      body: JSON.stringify({ constellationId, region: region || process.env.AWS_REGION, orphans, tracked })
     };
   } catch (error) {
     console.error('Error searching for orphaned instances:', error);

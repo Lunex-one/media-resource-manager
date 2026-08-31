@@ -127,7 +127,14 @@ async function handleAddVolume(event, context) {
         Tags: [
           { Key: 'Name', Value: `${workstation.workstationName || instanceId}-data` },
           { Key: 'ManagedBy', Value: process.env.PASCAL_CASE_NAME || 'MediaResourceManager' },
-          { Key: 'InstanceId', Value: instanceId }
+          { Key: 'InstanceId', Value: instanceId },
+          // The machine's own references, copied from its record so this disk lands in the same
+          // per-project cost query the machine does. EBS is billed separately from the instance, so
+          // a volume added later and left untagged is a project's cost quietly going missing. Each
+          // is omitted when the record does not carry it, never tagged with an empty value.
+          ...(workstation.constellationId ? [{ Key: 'ConstellationId', Value: workstation.constellationId }] : []),
+          ...(workstation.projectId ? [{ Key: 'ProjectId', Value: workstation.projectId }] : []),
+          ...(workstation.externalRef ? [{ Key: 'ExternalRef', Value: workstation.externalRef }] : [])
         ]
       }]
     }));
