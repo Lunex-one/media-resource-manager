@@ -46,6 +46,17 @@
 #   3. freshly minted HS256 token signed with the deployment's JWT secret
 #      from Secrets Manager (/${MRM_PASCAL_NAME}/Auth/JwtSecret)
 #
+# Token lifetime:
+#   A minted token lasts $MRM_AUTH_TTL_SECONDS seconds (default 3600). Raise it
+#   for a long-lived token, and pass --no-cache with it -- otherwise the token
+#   is written to the cache and silently becomes what every later call reuses:
+#
+#       MRM_AUTH_TTL_SECONDS=2592000 ./scripts/mrm-api.sh --no-cache --token
+#
+#   The authorizer checks only `exp` (lambda/jwt-authorizer/index.js), so a
+#   long-lived token cannot be revoked short of rotating the JWT secret -- which
+#   invalidates every token, live web console sessions included.
+#
 # Requires: aws CLI with credentials for the deployment account, node, curl.
 
 set -euo pipefail
