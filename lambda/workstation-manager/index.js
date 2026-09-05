@@ -1665,6 +1665,23 @@ async function getExecutionStatus(event) {
   // instance leaked: the instance id enters the execution history only when the create
   // function returns, and the window that leaks one is precisely the window where it never
   // does. GET /workstations/orphans is what answers that.
+  //
+  // A FAILED execution has no output, so `error` and `cause` are the whole of what this endpoint
+  // can say about it. They were left out until 2026-09-05 and the omission was expensive: six
+  // us-east-1 builds failed over one day, every layer above reported only that they had failed,
+  // and the reason - EC2 refusing RunInstances with VcpuLimitExceeded, the account's G-instance
+  // quota in that region being zero - was reachable only by calling DescribeExecution directly in
+  // the facility's own account. That is precisely the call this endpoint exists to make on a
+  // caller's behalf, and it was already making it.
+  //
+  // Both are passed through verbatim rather than interpreted. `cause` is usually a JSON document
+  // with `errorType`, `errorMessage` and `trace` when a Lambda threw, and a bare string when Step
+  // Functions itself failed the state; parsing it here would have to guess which, and a guess that
+  // drops the unrecognised shape is how a reason goes missing in the first place.
+  //
+  // Note that a 200 body's `error` is Step Functions' name for what went wrong with the *build*.
+  // The `error` on this endpoint's own 400/404/500 bodies is a different thing - a fault in the
+  // call. The status code tells them apart.
   const executionArn = event.queryStringParameters?.executionArn;
   if (!executionArn) {
     return {
@@ -1686,7 +1703,9 @@ async function getExecutionStatus(event) {
         status: result.status,
         startDate: result.startDate,
         stopDate: result.stopDate || null,
-        output: parseExecutionOutput(result.output)
+        output: parseExecutionOutput(result.output),
+        error: result.error || null,
+        cause: result.cause || null
       })
     };
   } catch (error) {

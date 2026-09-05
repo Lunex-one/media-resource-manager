@@ -866,6 +866,22 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
       backoffRate: 2,
     });
 
+    // The same check on the no-cleanup path. It needs a state of its own because one Step Functions
+    // state cannot appear twice in a machine, and it is configured identically on purpose: the two
+    // paths differ in whether an orphaned DCV session had to be cleared away first, and in nothing
+    // at all about how a domain join is polled.
+    const checkDomainJoinStatusNoCleanupTask = new tasks.LambdaInvoke(this, 'CheckDomainJoinStatusNoCleanup', {
+      lambdaFunction: checkDomainJoinStatusFunction,
+      outputPath: '$.Payload',
+      retryOnServiceExceptions: false,
+    });
+    checkDomainJoinStatusNoCleanupTask.addRetry({
+      errors: ['Lambda.TooManyRequestsException', 'Lambda.ServiceException'],
+      interval: cdk.Duration.seconds(2),
+      maxAttempts: 6,
+      backoffRate: 2,
+    });
+
     // Step Functions task for configuring auto-login (standalone workstations)
     const configureAutoLoginTask = new tasks.LambdaInvoke(this, 'ConfigureAutoLogin', {
       lambdaFunction: configureAutoLoginFunction,
@@ -1287,6 +1303,13 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
       time: stepfunctions.WaitTime.duration(cdk.Duration.minutes(2)),
     });
 
+    // The same wait on the no-cleanup path. Hoisted here rather than built inline in the chain
+    // because the poll below has to loop back to it, and a state built inline can only be reached
+    // from the one place it is written.
+    const waitForDomainJoinNoCleanup = new stepfunctions.Wait(this, 'WaitForDomainJoinNoCleanup', {
+      time: stepfunctions.WaitTime.duration(cdk.Duration.minutes(2)),
+    });
+
     // Wait state for instance restart
     const waitForRestart = new stepfunctions.Wait(this, 'WaitForRestart', {
       time: stepfunctions.WaitTime.duration(cdk.Duration.minutes(1)),
@@ -1413,7 +1436,19 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
                                                       // Domain join done → shared configure system flow
                                                       updateStatusConfiguringSystem
                                                     )
-                                                    .otherwise(waitForDomainJoin)
+                                                    // Still going, or not started yet. Loop.
+                                                    .when(stepfunctions.Condition.booleanEquals('$.domainJoinInProgress', true),
+                                                      waitForDomainJoin
+                                                    )
+                                                    // Over, and not successfully. This path polled
+                                                    // a dead command until the machine's own hour
+                                                    // ran out; now it says what happened.
+                                                    .otherwise(
+                                                      new stepfunctions.Fail(this, 'DomainJoinFailed', {
+                                                        cause: 'Domain join did not complete',
+                                                        error: 'DomainJoinError'
+                                                      })
+                                                    )
                                                   )
                                               )
                                           )
@@ -1587,23 +1622,33 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
                                         lambdaFunction: joinDomainFunction,
                                         outputPath: '$.Payload',
                                       }))
-                                      .next(new stepfunctions.Wait(this, 'WaitForDomainJoinNoCleanup', {
-                                        time: stepfunctions.WaitTime.duration(cdk.Duration.minutes(2)),
-                                      }))
-                                      .next(new tasks.LambdaInvoke(this, 'CheckDomainJoinStatusNoCleanup', {
-                                        lambdaFunction: checkDomainJoinStatusFunction,
-                                        outputPath: '$.Payload',
-                                      }))
+                                      .next(waitForDomainJoinNoCleanup)
+                                      .next(checkDomainJoinStatusNoCleanupTask)
+                                      // Poll until the join reports done, exactly as the cleanup
+                                      // path above does. This was two hand-unrolled checks until
+                                      // 2026-09-05, and the second one dangled: having no next
+                                      // state it was `End: true`, and it was the ONLY such state in
+                                      // this machine. So a join that had not finished after four
+                                      // minutes ended the execution as SUCCEEDED without ever
+                                      // reaching UpdateStatusCompleteNoCleanup — leaving the record
+                                      // reading `joining-domain` for ever, the machine never
+                                      // usable, and every caller told the build had worked.
                                       .next(new stepfunctions.Choice(this, 'IsDomainJoinedNoCleanup?')
                                         .when(stepfunctions.Condition.booleanEquals('$.domainJoinComplete', true),
                                           updateStatusConfiguringSystemNoCleanup
                                         )
-                                        .otherwise(new stepfunctions.Wait(this, 'WaitForDomainJoinNoCleanup2', {
-                                          time: stepfunctions.WaitTime.duration(cdk.Duration.minutes(2)),
-                                        }).next(new tasks.LambdaInvoke(this, 'CheckDomainJoinStatusNoCleanup2', {
-                                          lambdaFunction: checkDomainJoinStatusFunction,
-                                          outputPath: '$.Payload',
-                                        })))
+                                        // Still going, or not started yet. Loop.
+                                        .when(stepfunctions.Condition.booleanEquals('$.domainJoinInProgress', true),
+                                          waitForDomainJoinNoCleanup
+                                        )
+                                        // Over, and not successfully. Fail here rather than polling
+                                        // a dead command until this machine's own hour runs out.
+                                        .otherwise(
+                                          new stepfunctions.Fail(this, 'DomainJoinFailedNoCleanup', {
+                                            cause: 'Domain join did not complete',
+                                            error: 'DomainJoinError'
+                                          })
+                                        )
                                       )
                                   )
                               )

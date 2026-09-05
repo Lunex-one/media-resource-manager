@@ -1803,7 +1803,18 @@
         },
         "output": {
           "type": "object",
-          "nullable": true
+          "nullable": true,
+          "description": "The execution's result, present only when it SUCCEEDED. A failed execution has none; `error` and `cause` are what describe it."
+        },
+        "error": {
+          "type": "string",
+          "nullable": true,
+          "description": "Step Functions' name for what ended a terminal execution, e.g. `VcpuLimitExceeded`. Null while RUNNING and on success. Not to be confused with the `error` field on this endpoint's 400/404/500 bodies, which reports a fault in the call rather than in the build."
+        },
+        "cause": {
+          "type": "string",
+          "nullable": true,
+          "description": "The detail behind `error`, passed through verbatim. Usually a JSON document with `errorType`, `errorMessage` and `trace` where a Lambda threw; a bare string where Step Functions itself failed the state. Null while RUNNING and on success."
         }
       }
     }
@@ -3747,7 +3758,7 @@
     },
     "GET /workstations/executions": {
       "summary": "Read the state of one workstation-creation execution",
-      "description": "POST /workstations answers with an executionArn and no instance id, and nothing stores that ARN elsewhere, so this is how a caller that kept it asks what became of the work. A terminal status does not settle whether an instance leaked: the instance id enters the execution history only when the create function returns, and the window that leaks one is the window where it never does. GET /workstations/orphans answers that.",
+      "description": "POST /workstations answers with an executionArn and no instance id, and nothing stores that ARN elsewhere, so this is how a caller that kept it asks what became of the work. A failed execution has no output: `error` and `cause` carry Step Functions' own reason, which is the only account of why a build failed that leaves this API. A terminal status does not settle whether an instance leaked: the instance id enters the execution history only when the create function returns, and the window that leaks one is the window where it never does. GET /workstations/orphans answers that.",
       "parameters": [
         {
           "name": "executionArn",
