@@ -17,7 +17,16 @@ def handler(event, context):
         # Get workstation details from DynamoDB to determine platform and region
         workstation = table.get_item(Key={'instanceId': instance_id}).get('Item', {})
         platform = workstation.get('platform', 'windows')  # Default to windows for backward compatibility
-        join_domain = workstation.get('joinDomain', False)
+        # A record written before joinDomain was persisted on create (or one built by this code's
+        # own prior version) carries no such field, and reading that absence as False is what let
+        # this reconfigure a domain-joined desktop for local-Administrator auto-login the first
+        # time it was ever stopped and started again: joinDomain never reaches a workstation's
+        # record without domainId beside it, so a domainId with no joinDomain answer is still a
+        # machine that was joined. lambda/fsx-smb-mount-manager/index.js's isDomainJoined reads the
+        # same two fields for the same reason.
+        join_domain = workstation.get('joinDomain')
+        if join_domain is None:
+            join_domain = bool(workstation.get('domainId'))
         workstation_region = workstation.get('region', os.environ.get('AWS_REGION'))
         
         print(f"Starting instance {instance_id}, platform: {platform}, joinDomain: {join_domain}, region: {workstation_region}")
