@@ -19,6 +19,27 @@ function getEC2Client(region) {
 }
 
 /**
+ * Which Linux distribution an image is, in the exact vocabulary that reads the answer.
+ *
+ * The four words matter and are not ours to choose. `lambda/dcv-session-manager/index.py` matches
+ * `linuxDistro` against 'rocky', 'rhel' and 'centos' - all three meaning a DCV session belongs to
+ * the `rocky` user - and against 'ubuntu', and it treats any other value exactly as it treats an
+ * absent one. So this returns one of those four or null, and never a word of its own invention.
+ *
+ * `null` is an honest answer rather than a failure: the caller then leaves the attribute off the
+ * record, and the reader falls back to the workstation name and the AMI just as it did before
+ * anything wrote this field at all.
+ */
+function detectLinuxDistro(...texts) {
+    const haystack = texts.filter(Boolean).join(' ').toLowerCase();
+    if (haystack.includes('rocky')) return 'rocky';
+    if (haystack.includes('rhel') || haystack.includes('red hat')) return 'rhel';
+    if (haystack.includes('centos')) return 'centos';
+    if (haystack.includes('ubuntu')) return 'ubuntu';
+    return null;
+}
+
+/**
  * Generate a unique hostname using atomic DynamoDB counter
  */
 async function generateHostname() {
@@ -167,10 +188,14 @@ exports.handler = async (event) => {
 
     // Get AMI minimum volume size to ensure we don't create a volume smaller than the snapshot
     let amiMinVolumeSize = 100;
+    let amiOwnName = null;
+    let amiOwnDescription = null;
     try {
         const describeResult = await ec2.send(new DescribeImagesCommand({ ImageIds: [effectiveAmiId] }));
         const image = describeResult.Images?.[0];
         if (image) {
+            amiOwnName = image.Name || null;
+            amiOwnDescription = image.Description || null;
             const rootDevice = image.BlockDeviceMappings?.find(
                 bdm => bdm.DeviceName === image.RootDeviceName || bdm.DeviceName === '/dev/sda1'
             );
@@ -183,6 +208,25 @@ exports.handler = async (event) => {
 
     const effectiveVolumeSize = Math.max(rootVolumeSize || 100, amiMinVolumeSize);
     console.log(`Requested: ${rootVolumeSize}GB, AMI minimum: ${amiMinVolumeSize}GB, Using: ${effectiveVolumeSize}GB`);
+
+    // Which distribution this machine is, written down while the evidence is in hand rather than
+    // guessed at from its name when somebody tries to connect.
+    //
+    // The AMI's own name and description are asked first because they describe what is actually
+    // installed. `imageName` is asked second and is a fallback rather than the answer: it is a
+    // label a person typed for a catalogue row or a pipeline, so it can say nothing about the
+    // distribution, or the wrong thing, and a replicated regional copy does not always carry the
+    // source AMI's name into the region this describe just read.
+    //
+    // Until this landed, nothing in MRM ever wrote `linuxDistro` and `dcv-session-manager` was its
+    // only reader - so the field it calls "most reliable" was always empty, and the first check
+    // that could ever fire was the one beneath it: whether the *workstation name* contained
+    // 'rocky'. That made a display name load-bearing. Renaming a Rocky machine to anything without
+    // the word in it moved its DCV sessions onto the `ubuntu` user, and every connection to that
+    // machine failed. Names are editable from MRM's own list views and through
+    // `PUT /workstations/{id}`, so this was reachable by an ordinary rename.
+    const linuxDistro = detectLinuxDistro(amiOwnName, amiOwnDescription, imageName);
+    console.log(`Linux distro: ${linuxDistro || 'undetermined'} (AMI name: ${amiOwnName || 'unknown'}, image name: ${imageName})`);
 
     // Create workstation name from image name + counter number
     // e.g., "rocky-linux-9-0001" or "ubuntu-0001"
@@ -280,6 +324,9 @@ fi
                 instanceType, workstationName,
                 hostname, hostnameNumber,
                 platform: 'Linux', hasGpu,
+                // Omitted when undetermined, under the same rule as the fields above: absent means
+                // "nothing could tell", which is what the reader's own fallback chain is for.
+                ...(linuxDistro && { linuxDistro }),
                 status: 'launching', dcvStatus: 'launching', instanceStatus: 'pending',
                 region: targetRegion, subnetId,
                 instanceStartTime: currentTime, createdAt: currentTime,
