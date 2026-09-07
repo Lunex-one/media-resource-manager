@@ -74,7 +74,7 @@ async function generateHostname() {
 exports.handler = async (event) => {
     console.log('Creating EC2 instance:', JSON.stringify(event, null, 2));
 
-    const { amiId, instanceType, assignedUserId, domainId, retrySubnetIndex = 0, rootVolumeSize, pipelineId, acronym, region, regionalConfig,
+    const { amiId, instanceType, assignedUserId, domainId, joinDomain, retrySubnetIndex = 0, rootVolumeSize, pipelineId, acronym, region, regionalConfig,
             externalRef, constellationId, projectId } = event;
     
     // Determine target region and configuration
@@ -267,6 +267,13 @@ exports.handler = async (event) => {
             instanceStartTime: currentTime,
             createdAt: currentTime,
             ...(domainId && { domainId }),
+            // Written unconditionally, unlike the fields above: `false` is a real, useful answer
+            // here and not a value to omit. Without it, start-instance has no way to tell a
+            // machine that was never meant to join a domain from one this record simply predates —
+            // every workstation built before this line existed reads the same absent field either
+            // way, which is what let start-instance reconfigure a domain-joined desktop for
+            // local-Administrator auto-login the first time it was stopped and started again.
+            joinDomain: Boolean(joinDomain),
             ...(pipelineId && pipelineId !== '' && { pipelineId })
         };
 
@@ -287,7 +294,7 @@ exports.handler = async (event) => {
             instanceStatus: 'pending',
             region: targetRegion,
             subnetId: subnetId,
-            joinDomain: event.joinDomain
+            joinDomain: Boolean(joinDomain)
         };
     } catch (error) {
         // AWS SDK v3 uses error.name for service exceptions
