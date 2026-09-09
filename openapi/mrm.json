@@ -5416,7 +5416,8 @@
               "VERIFYING",
               "SUCCESS",
               "ERROR"
-            ]
+            ],
+            "description": "Where the execution got to. A failed execution reads ERROR and carries an endTime; it stayed at LAUNCHING for ever until that was fixed, because only the successful path closed the record."
           },
           "startTime": {
             "type": "string",
@@ -5424,7 +5425,8 @@
           },
           "endTime": {
             "type": "string",
-            "format": "date-time"
+            "format": "date-time",
+            "description": "When the execution stopped, whether it succeeded or failed. Absent only while it is still running."
           },
           "bytesTransferred": {
             "type": "integer"
@@ -5433,13 +5435,16 @@
             "type": "integer"
           },
           "duration": {
-            "type": "integer"
+            "type": "integer",
+            "description": "How long the execution took, in whole seconds. Derived from startTime and endTime, so it is absent until the execution has finished."
           },
           "errorCode": {
-            "type": "string"
+            "type": "string",
+            "description": "DataSync's own code for why the execution failed, taken from the Result of DescribeTaskExecution. Present only on a failed execution, and only when DataSync reported one."
           },
           "errorMessage": {
-            "type": "string"
+            "type": "string",
+            "description": "DataSync's own description of the failure, its Result.ErrorDetail. Present only on a failed execution, and only when DataSync reported a detail beside the code."
           }
         }
       },
