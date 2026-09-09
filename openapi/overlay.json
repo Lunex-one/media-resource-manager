@@ -1394,6 +1394,18 @@
         "options": {
           "$ref": "#/components/schemas/TaskOptions"
         },
+        "constellationId": {
+          "type": "string",
+          "description": "The identity a Constellation plan resource is known by. Absent - not empty - on a task nobody set it on. Correlating a task with the Constellation resource that asked for it means listing tasks and matching on this, the same way storage is matched."
+        },
+        "projectId": {
+          "type": "string",
+          "description": "The Constellation project the task was booked for. Absent - not empty - on a task nobody set it on."
+        },
+        "externalRef": {
+          "type": "string",
+          "description": "A free-form reference the facility owns. Absent - not empty - until something sets it. Because it can change at any time, nothing depends on it for recovery."
+        },
         "lastExecutionId": {
           "type": "string"
         },
@@ -1433,6 +1445,18 @@
         },
         "options": {
           "$ref": "#/components/schemas/TaskOptions"
+        },
+        "constellationId": {
+          "type": "string",
+          "description": "The identity a Constellation plan resource is known by. Optional: set when Constellation asks for the task, and omitted for a task created in MRM itself. Recorded on the task record only - unlike a workstation or a filesystem, the DataSync task is not tagged with it in AWS."
+        },
+        "projectId": {
+          "type": "string",
+          "description": "The Constellation project the task was booked for. Optional, and omitted for a task created in MRM itself."
+        },
+        "externalRef": {
+          "type": "string",
+          "description": "A free-form reference the facility owns. Optional. Because it can change at any time, nothing depends on it for recovery."
         }
       }
     },
@@ -1444,6 +1468,18 @@
         },
         "options": {
           "$ref": "#/components/schemas/TaskOptions"
+        },
+        "constellationId": {
+          "type": "string",
+          "description": "The identity a Constellation plan resource is known by. Optional: set when Constellation asks for the task, and omitted for a task created in MRM itself. Recorded on the task record only - unlike a workstation or a filesystem, the DataSync task is not tagged with it in AWS. Sending an empty string removes the attribute; omitting the field leaves it unchanged."
+        },
+        "projectId": {
+          "type": "string",
+          "description": "The Constellation project the task was booked for. Optional, and omitted for a task created in MRM itself. Sending an empty string removes the attribute; omitting the field leaves it unchanged."
+        },
+        "externalRef": {
+          "type": "string",
+          "description": "A free-form reference the facility owns. Optional. Because it can change at any time, nothing depends on it for recovery. Sending an empty string removes the attribute; omitting the field leaves it unchanged."
         }
       }
     },

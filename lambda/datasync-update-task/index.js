@@ -120,6 +120,39 @@ exports.handler = async (event) => {
       expressionAttributeValues[':options'] = updatedOptions;
     }
     
+    // The three references, under the rule datasync-create-task writes them by: a value sets the
+    // attribute, an empty one removes it, so "nobody set this" stays distinguishable from "set to
+    // nothing". A body that mentions none of them leaves all three alone, which is what the
+    // console's edit form sends.
+    //
+    // `references` is the same three as they stand after this call, for the response to echo.
+    const removeExpressions = [];
+    const references = {
+      ...(existingTask.constellationId && { constellationId: existingTask.constellationId }),
+      ...(existingTask.projectId && { projectId: existingTask.projectId }),
+      ...(existingTask.externalRef && { externalRef: existingTask.externalRef })
+    };
+    for (const field of ['constellationId', 'projectId', 'externalRef']) {
+      if (body[field] === undefined) continue;
+      if (body[field] === '' || body[field] === null) {
+        removeExpressions.push(`#${field}`);
+        expressionAttributeNames[`#${field}`] = field;
+        delete references[field];
+      } else {
+        updateExpressions.push(`#${field} = :${field}`);
+        expressionAttributeNames[`#${field}`] = field;
+        expressionAttributeValues[`:${field}`] = body[field];
+        references[field] = body[field];
+      }
+    }
+    
+    // SET always has #updatedAt and :updatedAt in it, so neither the clause nor
+    // ExpressionAttributeValues can come out empty the way update-storage's can.
+    const clauses = [`SET ${updateExpressions.join(', ')}`];
+    if (removeExpressions.length > 0) {
+      clauses.push(`REMOVE ${removeExpressions.join(', ')}`);
+    }
+    
     // Update DynamoDB
     await dynamodb.send(new UpdateCommand({
       TableName: process.env.DATASYNC_TABLE_NAME,
@@ -127,7 +160,7 @@ exports.handler = async (event) => {
         pk: `TASK#${taskId}`,
         sk: 'METADATA'
       },
-      UpdateExpression: `SET ${updateExpressions.join(', ')}`,
+      UpdateExpression: clauses.join(' '),
       ExpressionAttributeNames: expressionAttributeNames,
       ExpressionAttributeValues: expressionAttributeValues
     }));
@@ -146,6 +179,7 @@ exports.handler = async (event) => {
           sourceLocationId: existingTask.sourceLocationId,
           destinationLocationId: existingTask.destinationLocationId,
           options: updatedOptions,
+          ...references,
           updatedAt: timestamp
         }
       })

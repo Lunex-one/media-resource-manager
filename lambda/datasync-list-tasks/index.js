@@ -46,6 +46,13 @@ exports.handler = async (event) => {
       destinationLocationArn: item.destinationLocationArn,
       destinationLocationName: item.destinationLocationName,
       options: item.options,
+      // There is no GET /datasync/tasks/{taskId}, so this projection is the only way to read a
+      // task back and a field missing from it is unreadable whatever the record holds. An absent
+      // reference stays absent rather than becoming '': the value is undefined here and
+      // JSON.stringify drops the key.
+      constellationId: item.constellationId,
+      projectId: item.projectId,
+      externalRef: item.externalRef,
       lastExecutionId: item.lastExecutionId,
       lastExecutionStatus: item.lastExecutionStatus,
       lastExecutionTime: item.lastExecutionTime,
