@@ -5,6 +5,7 @@ const { EC2Client, RunInstancesCommand, DescribeImagesCommand } = require('@aws-
 const { DynamoDBDocumentClient, PutCommand, QueryCommand, GetCommand, ScanCommand, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { SSMClient, GetParameterCommand } = require('@aws-sdk/client-ssm');
+const { distroFromAmiOrImageName } = require('./linux-distro');
 
 // Default clients for primary region
 const dynamodb = DynamoDBDocumentClient.from(new DynamoDBClient());
@@ -16,27 +17,6 @@ function getEC2Client(region) {
         return new EC2Client({ region });
     }
     return new EC2Client();
-}
-
-/**
- * Which Linux distribution an image is, in the exact vocabulary that reads the answer.
- *
- * The four words matter and are not ours to choose. `lambda/dcv-session-manager/index.py` matches
- * `linuxDistro` against 'rocky', 'rhel' and 'centos' - all three meaning a DCV session belongs to
- * the `rocky` user - and against 'ubuntu', and it treats any other value exactly as it treats an
- * absent one. So this returns one of those four or null, and never a word of its own invention.
- *
- * `null` is an honest answer rather than a failure: the caller then leaves the attribute off the
- * record, and the reader falls back to the workstation name and the AMI just as it did before
- * anything wrote this field at all.
- */
-function detectLinuxDistro(...texts) {
-    const haystack = texts.filter(Boolean).join(' ').toLowerCase();
-    if (haystack.includes('rocky')) return 'rocky';
-    if (haystack.includes('rhel') || haystack.includes('red hat')) return 'rhel';
-    if (haystack.includes('centos')) return 'centos';
-    if (haystack.includes('ubuntu')) return 'ubuntu';
-    return null;
 }
 
 /**
@@ -212,11 +192,7 @@ exports.handler = async (event) => {
     // Which distribution this machine is, written down while the evidence is in hand rather than
     // guessed at from its name when somebody tries to connect.
     //
-    // The AMI's own name and description are asked first because they describe what is actually
-    // installed. `imageName` is asked second and is a fallback rather than the answer: it is a
-    // label a person typed for a catalogue row or a pipeline, so it can say nothing about the
-    // distribution, or the wrong thing, and a replicated regional copy does not always carry the
-    // source AMI's name into the region this describe just read.
+    // `linux-distro.js` owns which evidence outranks which, and says why.
     //
     // Until this landed, nothing in MRM ever wrote `linuxDistro` and `dcv-session-manager` was its
     // only reader - so the field it calls "most reliable" was always empty, and the first check
@@ -225,7 +201,7 @@ exports.handler = async (event) => {
     // the word in it moved its DCV sessions onto the `ubuntu` user, and every connection to that
     // machine failed. Names are editable from MRM's own list views and through
     // `PUT /workstations/{id}`, so this was reachable by an ordinary rename.
-    const linuxDistro = detectLinuxDistro(amiOwnName, amiOwnDescription, imageName);
+    const linuxDistro = distroFromAmiOrImageName(amiOwnName, amiOwnDescription, imageName);
     console.log(`Linux distro: ${linuxDistro || 'undetermined'} (AMI name: ${amiOwnName || 'unknown'}, image name: ${imageName})`);
 
     // Create workstation name from image name + counter number
