@@ -30,6 +30,10 @@ export interface DataSyncTask {
   destinationLocationId: string;
   destinationLocationArn: string;
   options: TaskOptions;
+  // Set by an API caller, not from this UI. Absent on anything created in MRM itself.
+  constellationId?: string;
+  projectId?: string;
+  externalRef?: string;
   lastExecutionId?: string;
   lastExecutionStatus?: string;
   lastExecutionTime?: string;
@@ -85,11 +89,19 @@ export interface CreateTaskRequest {
   sourceLocationId: string;
   destinationLocationId: string;
   options?: Partial<TaskOptions>;
+  // Set by an API caller, not from this UI. Absent on anything created in MRM itself.
+  constellationId?: string;
+  projectId?: string;
+  externalRef?: string;
 }
 
 export interface UpdateTaskRequest {
   name?: string;
   options?: Partial<TaskOptions>;
+  // Set by an API caller, not from this UI. Absent on anything created in MRM itself.
+  constellationId?: string;
+  projectId?: string;
+  externalRef?: string;
 }
 
 // Helper to get auth headers

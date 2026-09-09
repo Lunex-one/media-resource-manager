@@ -80,6 +80,33 @@ const DEFAULT_OPTIONS = {
   logLevel: 'BASIC'  // BASIC logging enabled by default with CloudWatch log group
 };
 
+/**
+ * The three references a caller may attach to a task, as record attributes.
+ *
+ * `constellationId` is the identity a Constellation plan resource is known by, `projectId` the
+ * project it was booked for, and `externalRef` a free-form reference the facility can edit
+ * afterwards. Each is omitted rather than stored as '' so that "nobody set this" stays
+ * distinguishable from "set to nothing", which is the rule the storage and workstation records
+ * already follow.
+ *
+ * All three are optional. A task created from MRM's own console supplies none of them, and such a
+ * request behaves exactly as it did before these existed.
+ *
+ * Recorded, but tagged nowhere. Storage and workstations carry the same three onto the real AWS
+ * resources as CloudFormation stack tags, so a cost query can group by them. A task is made here
+ * by a direct CreateTask call, and this Lambda's role is granted datasync:CreateTask without
+ * datasync:TagResource, so tagging the task would be an IAM change as well as a code one. The
+ * record is therefore the only place the correlation lives - enough to find a task again when the
+ * response that would have carried its id was lost.
+ */
+function referenceAttributes(data) {
+  return {
+    ...(data.constellationId && { constellationId: data.constellationId }),
+    ...(data.projectId && { projectId: data.projectId }),
+    ...(data.externalRef && { externalRef: data.externalRef })
+  };
+}
+
 // Validate location compatibility (S3 <-> FSx only)
 const areLocationsCompatible = (sourceType, destType) => {
   const isSourceS3 = sourceType === 'S3';
@@ -299,6 +326,7 @@ exports.handler = async (event) => {
       destinationLocationArn: destLocation.locationArn,
       destinationLocationName: destLocation.name,
       options: taskOptions,
+      ...referenceAttributes(body),
       createdAt: timestamp,
       updatedAt: timestamp
     };
@@ -324,6 +352,7 @@ exports.handler = async (event) => {
           sourceLocationId,
           destinationLocationId,
           options: taskOptions,
+          ...referenceAttributes(body),
           createdAt: timestamp
         }
       })
