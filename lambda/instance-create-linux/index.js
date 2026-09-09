@@ -5,6 +5,7 @@ const { EC2Client, RunInstancesCommand, DescribeImagesCommand } = require('@aws-
 const { DynamoDBDocumentClient, PutCommand, QueryCommand, GetCommand, ScanCommand, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { SSMClient, GetParameterCommand } = require('@aws-sdk/client-ssm');
+const { distroFromAmiOrImageName } = require('./linux-distro');
 
 // Default clients for primary region
 const dynamodb = DynamoDBDocumentClient.from(new DynamoDBClient());
@@ -167,10 +168,14 @@ exports.handler = async (event) => {
 
     // Get AMI minimum volume size to ensure we don't create a volume smaller than the snapshot
     let amiMinVolumeSize = 100;
+    let amiOwnName = null;
+    let amiOwnDescription = null;
     try {
         const describeResult = await ec2.send(new DescribeImagesCommand({ ImageIds: [effectiveAmiId] }));
         const image = describeResult.Images?.[0];
         if (image) {
+            amiOwnName = image.Name || null;
+            amiOwnDescription = image.Description || null;
             const rootDevice = image.BlockDeviceMappings?.find(
                 bdm => bdm.DeviceName === image.RootDeviceName || bdm.DeviceName === '/dev/sda1'
             );
@@ -183,6 +188,21 @@ exports.handler = async (event) => {
 
     const effectiveVolumeSize = Math.max(rootVolumeSize || 100, amiMinVolumeSize);
     console.log(`Requested: ${rootVolumeSize}GB, AMI minimum: ${amiMinVolumeSize}GB, Using: ${effectiveVolumeSize}GB`);
+
+    // Which distribution this machine is, written down while the evidence is in hand rather than
+    // guessed at from its name when somebody tries to connect.
+    //
+    // `linux-distro.js` owns which evidence outranks which, and says why.
+    //
+    // Until this landed, nothing in MRM ever wrote `linuxDistro` and `dcv-session-manager` was its
+    // only reader - so the field it calls "most reliable" was always empty, and the first check
+    // that could ever fire was the one beneath it: whether the *workstation name* contained
+    // 'rocky'. That made a display name load-bearing. Renaming a Rocky machine to anything without
+    // the word in it moved its DCV sessions onto the `ubuntu` user, and every connection to that
+    // machine failed. Names are editable from MRM's own list views and through
+    // `PUT /workstations/{id}`, so this was reachable by an ordinary rename.
+    const linuxDistro = distroFromAmiOrImageName(amiOwnName, amiOwnDescription, imageName);
+    console.log(`Linux distro: ${linuxDistro || 'undetermined'} (AMI name: ${amiOwnName || 'unknown'}, image name: ${imageName})`);
 
     // Create workstation name from image name + counter number
     // e.g., "rocky-linux-9-0001" or "ubuntu-0001"
@@ -280,6 +300,9 @@ fi
                 instanceType, workstationName,
                 hostname, hostnameNumber,
                 platform: 'Linux', hasGpu,
+                // Omitted when undetermined, under the same rule as the fields above: absent means
+                // "nothing could tell", which is what the reader's own fallback chain is for.
+                ...(linuxDistro && { linuxDistro }),
                 status: 'launching', dcvStatus: 'launching', instanceStatus: 'pending',
                 region: targetRegion, subnetId,
                 instanceStartTime: currentTime, createdAt: currentTime,
