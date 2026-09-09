@@ -656,17 +656,19 @@ export class DataSyncStack extends cdk.Stack {
               pk: { "S.$": "$.taskPk" },
               sk: { "S.$": "States.Format('EXECUTION#{}', $.startTime)" }
             },
-            UpdateExpression: "SET #status = :status, endTime = :endTime, bytesTransferred = :bytes, filesTransferred = :files, #duration = :duration",
+            // No duration is written here any more. It used to be set from
+            // EstimatedFilesToTransfer - a file count in a field the UI renders with
+            // formatDuration(seconds) - and datasync-get-executions now derives it from
+            // startTime and endTime instead, which this state writes.
+            UpdateExpression: "SET #status = :status, endTime = :endTime, bytesTransferred = :bytes, filesTransferred = :files",
             ExpressionAttributeNames: {
-              "#status": "status",
-              "#duration": "duration"
+              "#status": "status"
             },
             ExpressionAttributeValues: {
               ":status": { "S": "SUCCESS" },
               ":endTime": { "S.$": "$$.State.EnteredTime" },
               ":bytes": { "N.$": "States.Format('{}', $.executionStatus.BytesTransferred)" },
-              ":files": { "N.$": "States.Format('{}', $.executionStatus.FilesTransferred)" },
-              ":duration": { "N.$": "States.Format('{}', $.executionStatus.EstimatedFilesToTransfer)" }
+              ":files": { "N.$": "States.Format('{}', $.executionStatus.FilesTransferred)" }
             }
           },
           End: true,
@@ -690,6 +692,122 @@ export class DataSyncStack extends cdk.Stack {
               ":status": { "S": "available" },
               ":updatedAt": { "S.$": "$$.State.EnteredTime" },
               ":execStatus": { "S": "ERROR" }
+            }
+          },
+          // ResultPath: null keeps the state input, which everything after this reads: $.error
+          // tells the two failure entry points apart, and $.taskPk and $.startTime address the
+          // execution row. Without it the UpdateItem result would replace the input and every
+          // path below would stop resolving. UpdateStatusToSuccess does the same for the same
+          // reason.
+          ResultPath: null,
+          Next: "CloseExecutionRecord?",
+          Retry: [{ ErrorEquals: ["States.ALL"], IntervalSeconds: 2, MaxAttempts: 3, BackoffRate: 2.0 }]
+        },
+        // Which failure this is decides whether there is an execution row to close.
+        //
+        // StartTaskExecution's Catch arrives with $.error set and no EXECUTION# row at all,
+        // because StoreExecutionRecord has not run yet. There is nothing to update, and
+        // $.executionStatus does not exist either.
+        //
+        // A failure that EvaluateExecutionStatus found - an ERROR status, or its Default for a
+        // status this machine does not name - arrives with the row written and $.executionStatus
+        // holding the DescribeTaskExecution result.
+        //
+        // Every field under that result's Result object is optional, so the error fields are
+        // tested with IsPresent rather than read blind: a States.Format over a path that does
+        // not resolve fails the state outright, which would trade a stale row for a broken
+        // machine. Each branch below writes only what it has, and the last one still closes the
+        // row even when DataSync gave no reason at all.
+        "CloseExecutionRecord?": {
+          Type: "Choice",
+          Choices: [
+            {
+              Variable: "$.error",
+              IsPresent: true,
+              Next: "ExecutionNeverStarted"
+            },
+            {
+              And: [
+                { Variable: "$.executionStatus.Result.ErrorCode", IsPresent: true },
+                { Variable: "$.executionStatus.Result.ErrorDetail", IsPresent: true }
+              ],
+              Next: "UpdateExecutionRecordFailed"
+            },
+            {
+              Variable: "$.executionStatus.Result.ErrorCode",
+              IsPresent: true,
+              Next: "UpdateExecutionRecordFailedCodeOnly"
+            }
+          ],
+          Default: "UpdateExecutionRecordFailedNoReason"
+        },
+        // StartTaskExecution never returned an execution, so no row was ever written and there
+        // is nothing to close. UpdateStatusToFailed has already put the task's METADATA row back
+        // to available, which is the whole of what this path can honestly record.
+        ExecutionNeverStarted: {
+          Type: "Succeed"
+        },
+        UpdateExecutionRecordFailed: {
+          Type: "Task",
+          Resource: "arn:aws:states:::dynamodb:updateItem",
+          Parameters: {
+            TableName: this.dataSyncTable.tableName,
+            Key: {
+              pk: { "S.$": "$.taskPk" },
+              sk: { "S.$": "States.Format('EXECUTION#{}', $.startTime)" }
+            },
+            UpdateExpression: "SET #status = :status, endTime = :endTime, errorCode = :errorCode, errorMessage = :errorMessage",
+            ExpressionAttributeNames: {
+              "#status": "status"
+            },
+            ExpressionAttributeValues: {
+              ":status": { "S": "ERROR" },
+              ":endTime": { "S.$": "$$.State.EnteredTime" },
+              ":errorCode": { "S.$": "$.executionStatus.Result.ErrorCode" },
+              ":errorMessage": { "S.$": "$.executionStatus.Result.ErrorDetail" }
+            }
+          },
+          End: true,
+          Retry: [{ ErrorEquals: ["States.ALL"], IntervalSeconds: 2, MaxAttempts: 3, BackoffRate: 2.0 }]
+        },
+        UpdateExecutionRecordFailedCodeOnly: {
+          Type: "Task",
+          Resource: "arn:aws:states:::dynamodb:updateItem",
+          Parameters: {
+            TableName: this.dataSyncTable.tableName,
+            Key: {
+              pk: { "S.$": "$.taskPk" },
+              sk: { "S.$": "States.Format('EXECUTION#{}', $.startTime)" }
+            },
+            UpdateExpression: "SET #status = :status, endTime = :endTime, errorCode = :errorCode",
+            ExpressionAttributeNames: {
+              "#status": "status"
+            },
+            ExpressionAttributeValues: {
+              ":status": { "S": "ERROR" },
+              ":endTime": { "S.$": "$$.State.EnteredTime" },
+              ":errorCode": { "S.$": "$.executionStatus.Result.ErrorCode" }
+            }
+          },
+          End: true,
+          Retry: [{ ErrorEquals: ["States.ALL"], IntervalSeconds: 2, MaxAttempts: 3, BackoffRate: 2.0 }]
+        },
+        UpdateExecutionRecordFailedNoReason: {
+          Type: "Task",
+          Resource: "arn:aws:states:::dynamodb:updateItem",
+          Parameters: {
+            TableName: this.dataSyncTable.tableName,
+            Key: {
+              pk: { "S.$": "$.taskPk" },
+              sk: { "S.$": "States.Format('EXECUTION#{}', $.startTime)" }
+            },
+            UpdateExpression: "SET #status = :status, endTime = :endTime",
+            ExpressionAttributeNames: {
+              "#status": "status"
+            },
+            ExpressionAttributeValues: {
+              ":status": { "S": "ERROR" },
+              ":endTime": { "S.$": "$$.State.EnteredTime" }
             }
           },
           End: true,

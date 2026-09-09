@@ -69,17 +69,12 @@ exports.handler = async (event) => {
       };
     }
     
-    if (task.status === 'invalid') {
-      return {
-        statusCode: 400,
-        headers: corsHeaders,
-        body: JSON.stringify({
-          success: false,
-          error: 'TASK_NOT_AVAILABLE',
-          message: 'The task is not in a runnable state. One or more locations may have been deleted.'
-        })
-      };
-    }
+    // A task status of 'invalid' was refused here, and nothing ever set one. The only statuses
+    // written to a task's METADATA row are 'available' (datasync-create-task, and both terminal
+    // states of the execution machine) and 'running' (UpdateStatusToRunning). The case the
+    // message described is handled elsewhere and differently: datasync-delete-location refuses
+    // with LOCATION_IN_USE while any task still references the location, and delete-storage
+    // deletes the dependent tasks outright rather than leaving one behind pointing at nothing.
     
     const executionId = crypto.randomUUID();
     const timestamp = new Date().toISOString();

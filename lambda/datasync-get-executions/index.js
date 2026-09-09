@@ -13,6 +13,29 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'GET,OPTIONS'
 };
 
+/**
+ * How long an execution took, in whole seconds, or undefined while it has not finished.
+ *
+ * Derived rather than stored. The state machine used to write a `duration` attribute from
+ * DescribeTaskExecution's EstimatedFilesToTransfer - a file count in a field the UI renders with
+ * formatDuration(seconds) - and no longer writes one at all. The row carries startTime and
+ * endTime, so the answer is a subtraction with nothing to keep in step.
+ *
+ * DescribeTaskExecution does report a real Result.TotalDuration, but only for Enhanced mode
+ * tasks. MRM calls CreateTask without a TaskMode, which means Basic mode, and the documented
+ * Basic mode response carries PrepareDuration, TransferDuration and VerifyDuration but no
+ * TotalDuration. The two timestamps are the only source that is always there.
+ *
+ * Seconds, because that is what the transfer page's formatDuration takes.
+ */
+function durationInSeconds(startTime, endTime) {
+  if (!startTime || !endTime) return undefined;
+  const start = Date.parse(startTime);
+  const end = Date.parse(endTime);
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return undefined;
+  return Math.round((end - start) / 1000);
+}
+
 // Maximum number of executions to return
 const MAX_EXECUTIONS = 10;
 
@@ -58,9 +81,14 @@ exports.handler = async (event) => {
       endTime: item.endTime,
       bytesTransferred: item.bytesTransferred,
       filesTransferred: item.filesTransferred,
-      bytesVerified: item.bytesVerified,
-      filesVerified: item.filesVerified,
-      duration: item.duration,
+      // bytesVerified and filesVerified used to be projected here and nothing ever wrote
+      // either, so both were undefined and JSON.stringify dropped them - they have never
+      // appeared in a response, and openapi/overlay.json does not describe them. Removing
+      // them changes nothing on the wire and stops the projection promising what it cannot
+      // deliver. DescribeTaskExecution has no BytesVerified field at all; it does report
+      // FilesVerified, but writing it would mean reading a path that the API omits when
+      // VerifyMode is NONE, and an unresolved path fails the state that reads it.
+      duration: durationInSeconds(item.startTime, item.endTime),
       errorCode: item.errorCode,
       errorMessage: item.errorMessage
     }));
