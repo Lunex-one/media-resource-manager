@@ -1136,6 +1136,9 @@ export class ApiStack extends cdk.Stack {
     this.apiUrl = this.api.url;
 
     // JWT Lambda Authorizer (supports both LDAP and Cognito tokens)
+    // Cognito tokens are RS256-verified against the User Pool JWKS
+    // (issuer, aud/client_id, token_use, exp, iat, nbf all enforced).
+    // LDAP tokens are HS256-verified against a Secrets Manager secret.
     const jwtAuthorizerFunction = new lambda.Function(this, 'JwtAuthorizerFunction', {
       functionName: `${props.acronym.toLowerCase()}-jwt-authorizer`,
       runtime: lambda.Runtime.NODEJS_22_X,
@@ -1148,8 +1151,8 @@ export class ApiStack extends cdk.Stack {
         // Cognito ID tokens are verified against the pool JWKS (RS256). Without
         // the pool id the authorizer fails Cognito tokens closed rather than
         // trusting them. CLIENT_ID pins the audience when set.
-        USER_POOL_ID: ssm.StringParameter.valueForStringParameter(this, `/${props.pascalCaseName}/Auth/UserPoolId`),
-        CLIENT_ID: ssm.StringParameter.valueForStringParameter(this, `/${props.pascalCaseName}/Auth/UserPoolClientId`)
+        COGNITO_USER_POOL_ID: ssm.StringParameter.valueForStringParameter(this, `/${props.pascalCaseName}/Auth/UserPoolId`),
+        COGNITO_APP_CLIENT_ID: ssm.StringParameter.valueForStringParameter(this, `/${props.pascalCaseName}/Auth/UserPoolClientId`)
       },
       timeout: cdk.Duration.seconds(10),
       reservedConcurrentExecutions: 25,
@@ -1842,6 +1845,12 @@ export class ApiStack extends cdk.Stack {
     // Grant workstation manager function permission to invoke LDAP auth function
     directLdapAuthFunction.grantInvoke(workstationManagerFunction);
     workstationManagerFunction.addEnvironment('LDAP_AUTH_FUNCTION_NAME', directLdapAuthFunction.functionName);
+
+    // change-password verifies the caller-supplied currentPassword by
+    // invoking ldap-auth before performing ds:ResetUserPassword. See
+    // GHSA-58q4-fcw9-2778 / SIM P498186948.
+    directLdapAuthFunction.grantInvoke(changePasswordFunction);
+    changePasswordFunction.addEnvironment('LDAP_AUTH_FUNCTION_NAME', directLdapAuthFunction.functionName);
 
     // Grant DirectLdapAuthFunction minimal required permissions
     directLdapAuthFunction.addToRolePolicy(new iam.PolicyStatement({
