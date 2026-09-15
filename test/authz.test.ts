@@ -8,12 +8,16 @@
  * the md5 invariant enforced in commit history to ensure every other copy
  * behaves the same way.
  *
+ * `requireSelfOrAdmin` was tested here until it lost its last caller. Deciding
+ * whether a workstation is the caller's moved to `ownership.js`, which resolves
+ * group membership as well as comparing ids — see `test/ownership.test.ts`.
+ *
  * See H1-3966572 / GHSA-58q4-fcw9-2778 / SIM P498186948.
  */
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const authz = require('../lambda/user-group-manager/authz.js');
-const { getCallerIdentity, requireAdmin, requireSelfOrAdmin, forbidden, unauthorized } = authz;
+const { getCallerIdentity, requireAdmin, forbidden, unauthorized } = authz;
 
 // Minimal event shape helpers. API Gateway serialises the authorizer
 // context to strings, so `isAdmin` arrives as 'true' / 'false' rather than
@@ -112,58 +116,6 @@ describe('requireAdmin', () => {
 
   it('rejects the string "1" — only exact "true" or boolean true counts', () => {
     const response = requireAdmin(eventFor({ isAdmin: '1', username: 'mallory' }));
-    expect(response).not.toBeNull();
-    expect(response.statusCode).toBe(403);
-  });
-});
-
-describe('requireSelfOrAdmin', () => {
-  it('returns null when the caller is admin, regardless of target', () => {
-    expect(
-      requireSelfOrAdmin(eventFor({ isAdmin: 'true', username: 'root' }), 'someone-else')
-    ).toBeNull();
-  });
-
-  it('returns null when the caller matches the target username exactly', () => {
-    expect(
-      requireSelfOrAdmin(eventFor({ isAdmin: 'false', username: 'alice' }), 'alice')
-    ).toBeNull();
-  });
-
-  it('returns a 403 when the caller is trying to act on another user', () => {
-    const response = requireSelfOrAdmin(
-      eventFor({ isAdmin: 'false', username: 'alice' }),
-      'bob'
-    );
-    expect(response).not.toBeNull();
-    expect(response.statusCode).toBe(403);
-    expect(JSON.parse(response.body).error).toMatch(/only modify your own account/i);
-  });
-
-  it('returns a 403 when authorizer context is missing', () => {
-    const response = requireSelfOrAdmin({}, 'alice');
-    expect(response).not.toBeNull();
-    expect(response.statusCode).toBe(403);
-  });
-
-  it('returns a 403 when the target is null and the caller is not admin', () => {
-    // Guards against a mistakenly-null assignedUserId letting a non-admin
-    // through (e.g., unassigned workstation lifecycle actions).
-    const response = requireSelfOrAdmin(
-      eventFor({ isAdmin: 'false', username: 'alice' }),
-      null
-    );
-    expect(response).not.toBeNull();
-    expect(response.statusCode).toBe(403);
-  });
-
-  it('does string comparison — usernames are case-sensitive', () => {
-    // Matches the behaviour of the JWT authorizer, which stamps the
-    // authenticated userId verbatim into event.requestContext.authorizer.
-    const response = requireSelfOrAdmin(
-      eventFor({ isAdmin: 'false', username: 'Alice' }),
-      'alice'
-    );
     expect(response).not.toBeNull();
     expect(response.statusCode).toBe(403);
   });

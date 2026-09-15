@@ -70,30 +70,9 @@ function requireAdmin(event) {
   return null;
 }
 
-/**
- * Return a 403 response object when the caller is neither the target user
- * nor an administrator; otherwise return null. `targetUsername` is compared
- * to the caller's own authenticated username from the authorizer context;
- * the body-supplied username must NOT be trusted for this check.
- */
-function requireSelfOrAdmin(event, targetUsername) {
-  const { username, isAdmin } = getCallerIdentity(event);
-  if (isAdmin) {
-    return null;
-  }
-  if (!username) {
-    return forbidden('Access denied.');
-  }
-  if (username !== targetUsername) {
-    return forbidden('Access denied. You can only modify your own account.');
-  }
-  return null;
-}
-
 module.exports = {
   getCallerIdentity,
   requireAdmin,
-  requireSelfOrAdmin,
   forbidden,
   unauthorized
 };
