@@ -67,6 +67,20 @@ exports.handler = async (event) => {
   }
 
   if (path.endsWith('/s3-buckets')) {
+    // All actions under this endpoint - browsing, uploading, downloading, deleting,
+    // and folder creation in any configured bucket, as well as the account-wide
+    // bucket listing below - are admin-only. A domain user with no administrative
+    // role has no legitimate reason to read or write bucket contents through this
+    // API.
+    //
+    // Interim decision, not an upstream pattern: awslabs/media-resource-manager
+    // has no equivalent per-bucket browse/upload/download/delete feature at all
+    // (see issue #27's planned Part 2, "auth-agnostic credential vending via
+    // POST /storage/media-credentials", which does not exist yet). Revisit this
+    // gate if/when that lands upstream.
+    const denial = requireAdmin(event);
+    if (denial) return denial;
+
     const bucketName = qs.bucket;
     const action = qs.action;
 
@@ -222,10 +236,7 @@ exports.handler = async (event) => {
     }
 
     // Handle /storage/s3-buckets endpoint (no bucket param) - list S3 buckets in the account.
-    // This enumerates non-MRM buckets too so it must be admin-only; regular
-    // users have no legitimate reason to see the account-wide bucket inventory.
-    const denial = requireAdmin(event);
-    if (denial) return denial;
+    // Already gated admin-only by the check at the top of this block.
     try {
       const listResult = await s3Client.send(new ListBucketsCommand({}));
       const buckets = listResult.Buckets || [];
