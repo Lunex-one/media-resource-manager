@@ -30,6 +30,12 @@ export interface ApiStackProps extends cdk.StackProps {
   productName: string;
   pascalCaseName: string;
   acronym: string;
+  /**
+   * Synth-time flag matching InfrastructureStack. When `false`, the JWT
+   * authorizer's Cognito env vars are set to empty strings (the Lambda's
+   * chooseTokenType routing handles LDAP-only tokens). Defaults to `true`.
+   */
+  useCognitoAuth?: boolean;
   userTable: dynamodb.Table;
   workstationTable: dynamodb.Table;
   amiTable: dynamodb.Table;
@@ -1139,6 +1145,21 @@ export class ApiStack extends cdk.Stack {
     // Cognito tokens are RS256-verified against the User Pool JWKS
     // (issuer, aud/client_id, token_use, exp, iat, nbf all enforced).
     // LDAP tokens are HS256-verified against a Secrets Manager secret.
+    // In LDAP-only mode (useCognitoAuth=false), the User Pool and its SSM
+    // parameters are not created by AuthConstruct. The synth-time SSM
+    // resolution below would then fail because CloudFormation cannot resolve
+    // {{resolve:ssm:...}} for parameters that don't exist. Use empty strings
+    // in that mode — the authorizer Lambda's chooseTokenType() only reaches
+    // Cognito verification when a token's issuer contains "cognito-idp", so
+    // LDAP-only tokens never touch these env vars, and Cognito tokens cannot
+    // arrive because no User Pool exists to issue them.
+    const cognitoUserPoolId = props.useCognitoAuth !== false
+      ? ssm.StringParameter.valueForStringParameter(this, `/${props.pascalCaseName}/Auth/UserPoolId`)
+      : '';
+    const cognitoAppClientId = props.useCognitoAuth !== false
+      ? ssm.StringParameter.valueForStringParameter(this, `/${props.pascalCaseName}/Auth/UserPoolClientId`)
+      : '';
+
     const jwtAuthorizerFunction = new lambda.Function(this, 'JwtAuthorizerFunction', {
       functionName: `${props.acronym.toLowerCase()}-jwt-authorizer`,
       runtime: lambda.Runtime.NODEJS_22_X,
@@ -1150,9 +1171,11 @@ export class ApiStack extends cdk.Stack {
         ADMIN_GROUP_NAME: ssm.StringParameter.valueForStringParameter(this, `/${props.pascalCaseName}/Auth/AdminGroupName`),
         // Cognito ID tokens are verified against the pool JWKS (RS256). Without
         // the pool id the authorizer fails Cognito tokens closed rather than
-        // trusting them. CLIENT_ID pins the audience when set.
-        COGNITO_USER_POOL_ID: ssm.StringParameter.valueForStringParameter(this, `/${props.pascalCaseName}/Auth/UserPoolId`),
-        COGNITO_APP_CLIENT_ID: ssm.StringParameter.valueForStringParameter(this, `/${props.pascalCaseName}/Auth/UserPoolClientId`)
+        // trusting them. CLIENT_ID pins the audience when set. Both resolve to
+        // empty strings when useCognitoAuth=false (see cognitoUserPoolId /
+        // cognitoAppClientId above) since no User Pool exists in that mode.
+        COGNITO_USER_POOL_ID: cognitoUserPoolId,
+        COGNITO_APP_CLIENT_ID: cognitoAppClientId,
       },
       timeout: cdk.Duration.seconds(10),
       reservedConcurrentExecutions: 25,
