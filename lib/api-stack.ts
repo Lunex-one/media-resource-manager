@@ -1083,6 +1083,32 @@ export class ApiStack extends cdk.Stack {
       resources: [props.groupsTable.tableArn],
     }));
 
+    // Resolve a caller's group membership before deciding whether a DCV session
+    // may be created for them. In Cognito mode the groups table above is the
+    // whole answer; in LDAP mode that table only says which groups exist and
+    // membership is read live from Directory Services, which is what these two
+    // actions are for. Without them this handler can only honour a workstation
+    // assigned to a person by name, and a group-assigned one is refused to
+    // everybody who is not an administrator.
+    dcvSessionManagerFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'ds:DescribeDirectories',
+        'ds-data:ListGroupMembers',
+      ],
+      resources: ['*'],
+    }));
+
+    // And the directory id itself, which is looked up here before SSM discovery
+    // is attempted. Narrow to the one parameter rather than the Identity prefix.
+    dcvSessionManagerFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['ssm:GetParameter'],
+      resources: [
+        `arn:aws:ssm:${this.region}:${this.account}:parameter/${props.pascalCaseName}/Identity/ActiveDirectoryId`,
+      ],
+    }));
+
     // Grant KMS permissions if tables use customer-managed encryption
     if (props.dataEncryptionKey) {
       props.dataEncryptionKey.grantDecrypt(dcvSessionManagerFunction);

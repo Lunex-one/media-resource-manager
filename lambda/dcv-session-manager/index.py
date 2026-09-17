@@ -10,6 +10,8 @@ import urllib.error
 import ssl
 import base64
 
+from ownership import may_operate
+
 def get_workstation_region(server_id):
     """Look up the region for a workstation from DynamoDB.
     
@@ -243,24 +245,12 @@ def lambda_handler(event, context):
     authorizer_ctx = (event.get('requestContext') or {}).get('authorizer') or {}
     caller_username = authorizer_ctx.get('username')
     caller_is_admin = authorizer_ctx.get('isAdmin') == 'true'
+    # Which scheme minted the caller's token. It decides how a username maps to
+    # what a workstation record can carry: see `ownership.query_id_for`.
+    caller_token_type = authorizer_ctx.get('tokenType')
 
     if not caller_username:
         return _unauthorized('Missing authorizer context')
-
-    def _normalize_user_id(uid):
-        # Match workstation-api normalizeUserId: strip common IdP prefixes and
-        # any @domain, then lowercase. This keeps ownership checks aligned
-        # with how workstation-manager and workstation-api compare ids.
-        if not uid:
-            return ''
-        normalized = uid
-        for prefix in ('IdentityCenter_', 'Okta_', 'SAML_', 'AzureAD_', 'AmazonFederate_'):
-            if normalized.startswith(prefix):
-                normalized = normalized[len(prefix):]
-                break
-        if '@' in normalized:
-            normalized = normalized.split('@', 1)[0]
-        return normalized.lower()
 
     try:
         body = json.loads(event.get('body', '{}'))
@@ -299,8 +289,12 @@ def lambda_handler(event, context):
                 ws_item = ws_resp.get('Item') if isinstance(ws_resp, dict) else None
                 if not ws_item:
                     return _forbidden('Access denied')
-                assigned = ws_item.get('assignedUserId')
-                if _normalize_user_id(assigned) != _normalize_user_id(caller_username):
+                if not may_operate(
+                    username=caller_username,
+                    token_type=caller_token_type,
+                    is_admin=caller_is_admin,
+                    assigned_user_id=ws_item.get('assignedUserId'),
+                ):
                     return _forbidden(
                         'Access denied. You may only connect to workstations assigned to you.'
                     )

@@ -7,10 +7,11 @@ const { EC2Client, TerminateInstancesCommand, DescribeInstancesCommand, StopInst
 const { SFNClient, StartExecutionCommand, DescribeExecutionCommand } = require('@aws-sdk/client-sfn');
 const { SSMClient, GetParameterCommand } = require('@aws-sdk/client-ssm');
 const { DirectoryServiceClient, DescribeDirectoriesCommand } = require('@aws-sdk/client-directory-service');
-const { DirectoryServiceDataClient, ListGroupMembersCommand } = require('@aws-sdk/client-directory-service-data');
+const { DirectoryServiceDataClient } = require('@aws-sdk/client-directory-service-data');
 const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
 const { CognitoIdentityProviderClient, ListUsersCommand } = require('@aws-sdk/client-cognito-identity-provider');
-const { requireAdmin, requireSelfOrAdmin } = require('./authz');
+const { requireAdmin, getCallerIdentity, forbidden } = require('./authz');
+const { mayOperate, resolveGroupIds, assignmentIdsFor } = require('./ownership');
 const { terminatedSelfHealParams } = require('./self-heal');
 
 const dynamoClient = new DynamoDBClient({ region: process.env.AWS_REGION });
@@ -22,6 +23,17 @@ const directoryService = new DirectoryServiceClient({ region: process.env.AWS_RE
 const directoryServiceData = new DirectoryServiceDataClient({ region: process.env.AWS_REGION });
 const lambdaClient = new LambdaClient({ region: process.env.AWS_REGION });
 const cognitoClient = new CognitoIdentityProviderClient({ region: process.env.AWS_REGION });
+
+// What ownership.js needs in order to resolve a caller's groups. Passed in
+// rather than imported by that module so the rule can be tested without AWS.
+function ownershipDeps() {
+  return {
+    dynamodb,
+    directoryServiceData,
+    getDirectoryId,
+    groupsTableName: process.env.GROUPS_TABLE_NAME
+  };
+}
 
 // Base image SSM parameter mappings - these are AWS public parameters available in all regions
 const BASE_IMAGE_SSM_PARAMS = {
@@ -250,6 +262,13 @@ exports.handler = async (event) => {
   // ownership: a user can start/stop/reboot the workstation they own.
   // Everything else is admin-only. See H1-3966572 / GHSA-58q4-fcw9-2778 /
   // SIM P498186948.
+  //
+  // "Own" means the same thing here as it does in the listing: assigned to the
+  // caller directly, OR assigned to one of their groups. It did not until this
+  // change — the gate compared `assignedUserId` to the username for exact
+  // equality — so a group-assigned workstation appeared in the console with a
+  // Start button that answered 403. `ownership.mayOperate` is the listing's own
+  // rule, lifted out so both use it.
   if (method !== 'GET' && method !== 'OPTIONS') {
     const routeKey = `${method} ${path}`;
     const isLifecycle =
@@ -283,8 +302,14 @@ exports.handler = async (event) => {
           body: JSON.stringify({ error: 'Workstation not found' })
         };
       }
-      const denial = requireSelfOrAdmin(event, wsResult.Item.assignedUserId);
-      if (denial) return denial;
+      const permitted = await mayOperate(
+        getCallerIdentity(event),
+        wsResult.Item.assignedUserId,
+        ownershipDeps()
+      );
+      if (!permitted) {
+        return forbidden('Access denied. You can only operate workstations assigned to you.');
+      }
     } else {
       // Admin only: create / update / delete / change-instance-type /
       // volume management.
@@ -414,83 +439,20 @@ async function getWorkstations(event) {
         : (currentUserId.includes('@') ? currentUserId.split('@')[0] : currentUserId);
       console.log('Querying workstations for user:', userIdForQuery);
       
-      // Get user's groups
-      let userGroups = [];
-      try {
-        if (tokenType === 'cognito') {
-          // Cognito mode: check group memberships in DynamoDB
-          const groupsResult = await dynamodb.send(new ScanCommand({
-            TableName: process.env.GROUPS_TABLE_NAME
-          }));
-          
-          console.log(`Checking DynamoDB group memberships for user: ${userIdForQuery}`);
-          
-          // Build variants for group membership check (with and without IdP prefix)
-          const memberVariants = [userIdForQuery];
-          if (userIdForQuery.includes('_')) {
-            const stripped = userIdForQuery.split('_').slice(1).join('_');
-            if (stripped && stripped !== userIdForQuery) memberVariants.push(stripped);
-          }
-          
-          for (const group of groupsResult.Items || []) {
-            const members = group.members || [];
-            if (memberVariants.some(v => members.includes(v))) {
-              console.log(`User ${userIdForQuery} is member of group ${group.groupName}`);
-              userGroups.push(group.groupId);
-            }
-          }
-        } else {
-          // LDAP mode: check group memberships via Directory Services
-          const directoryId = await getDirectoryId();
-          
-          // Get all groups and check which ones this user belongs to
-          const groupsResult = await dynamodb.send(new ScanCommand({
-            TableName: process.env.GROUPS_TABLE_NAME
-          }));
-          
-          console.log(`Checking Directory Services group memberships for user: ${userIdForQuery}`);
-          
-          // For each group, check if user is a member via Directory Services
-          for (const group of groupsResult.Items || []) {
-            try {
-              const sanitizedGroupName = group.groupName.replace(/[^a-zA-Z0-9\-_.]/g, '');
-              console.log(`Checking membership in group: ${sanitizedGroupName}`);
-              
-              const membersResult = await directoryServiceData.send(new ListGroupMembersCommand({
-                DirectoryId: directoryId,
-                SAMAccountName: sanitizedGroupName
-              }));
-              
-              const members = membersResult.Members?.map(member => member.SAMAccountName) || [];
-              console.log('Group', sanitizedGroupName, 'members:', members);
-              
-              if (members.includes(userIdForQuery)) {
-                console.log(`User ${userIdForQuery} is member of group ${sanitizedGroupName}`);
-                userGroups.push(group.groupId);
-              }
-            } catch (error) {
-              console.log('Error checking membership for group', group.groupName + ':', error);
-            }
-          }
-        }
-        
-        console.log('User groups from Directory Services:', userGroups);
-      } catch (error) {
-        console.log('Could not fetch user groups from Directory Services:', error);
-      }
+      // Get user's groups. The rule is in ownership.js so that the lifecycle
+      // gate above answers "is this the caller's workstation?" exactly the way
+      // this listing does; it used to answer differently, and more strictly.
+      const userGroups = await resolveGroupIds(
+        { username: currentUserId, tokenType },
+        ownershipDeps()
+      );
+      console.log('User groups:', userGroups);
       
-      // Query workstations assigned directly to user
-      // Also query with stripped userId (without IdP prefix) to handle workstations
-      // assigned before the user first logged in via Cognito (Identity Center sync
-      // stores userId without the "IdentityCenter_" prefix, but after login the
-      // Cognito username includes it)
-      const userIdVariants = [userIdForQuery];
-      if (userIdForQuery.includes('_')) {
-        const strippedId = userIdForQuery.split('_').slice(1).join('_');
-        if (strippedId && strippedId !== userIdForQuery) {
-          userIdVariants.push(strippedId);
-        }
-      }
+      // Query workstations assigned directly to user, under every id a
+      // workstation may carry for them. `assignmentIdsFor` is the same function
+      // the lifecycle gate matches on, so the listing and the gate cannot
+      // disagree about which ids count as this caller's.
+      const userIdVariants = assignmentIdsFor(currentUserId, tokenType);
       console.log('Querying GSI with userId variants:', userIdVariants);
       
       const directQueries = userIdVariants.map(uid =>
