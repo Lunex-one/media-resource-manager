@@ -12,6 +12,7 @@ const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
 const { CognitoIdentityProviderClient, ListUsersCommand } = require('@aws-sdk/client-cognito-identity-provider');
 const { requireAdmin, getCallerIdentity, forbidden } = require('./authz');
 const { mayOperate, resolveGroupIds, assignmentIdsFor } = require('./ownership');
+const { terminatedSelfHealParams } = require('./self-heal');
 
 const dynamoClient = new DynamoDBClient({ region: process.env.AWS_REGION });
 const dynamodb = DynamoDBDocumentClient.from(dynamoClient);
@@ -569,19 +570,19 @@ async function getWorkstations(event) {
         if (workstation.instanceStatus === 'terminated' && workstation.status !== 'Terminated') {
           workstation.status = 'Terminated';
           workstation.dcvStatus = 'stopped';
-          // Fire-and-forget DynamoDB update
-          dynamodb.send(new UpdateCommand({
-            TableName: process.env.WORKSTATION_TABLE_NAME,
-            Key: { instanceId: workstation.instanceId },
-            UpdateExpression: 'SET instanceStatus = :ist, #status = :wst, dcvStatus = :dcv, updatedAt = :ts REMOVE dcvSessionId, sessionState',
-            ExpressionAttributeNames: { '#status': 'status' },
-            ExpressionAttributeValues: {
-              ':ist': 'terminated',
-              ':wst': 'Terminated',
-              ':dcv': 'stopped',
-              ':ts': new Date().toISOString(),
-            },
-          })).catch(err => console.warn('Failed to self-heal workstation', workstation.instanceId + ':', err.message));
+          // Fire-and-forget DynamoDB update, guarded so that it heals a record rather than
+          // re-creating one. See lambda/workstation-manager/self-heal.js.
+          dynamodb.send(new UpdateCommand(
+            terminatedSelfHealParams(process.env.WORKSTATION_TABLE_NAME, workstation.instanceId)
+          )).catch(err => {
+            if (err.name === 'ConditionalCheckFailedException') {
+              // Deleted between the read above and this write. Nothing is left to heal, and
+              // writing it back is precisely what the condition exists to prevent.
+              console.log('Skipped self-heal for ' + workstation.instanceId + ' - record no longer exists');
+              return;
+            }
+            console.warn('Failed to self-heal workstation', workstation.instanceId + ':', err.message);
+          });
         }
       });
     }
@@ -1199,7 +1200,12 @@ async function updateWorkstation(instanceId, updateData) {
     const updateParams = {
       TableName: process.env.WORKSTATION_TABLE_NAME,
       Key: { instanceId },
-      UpdateExpression: fullUpdateExpression
+      UpdateExpression: fullUpdateExpression,
+      // Same rule as the self-heal in getWorkstations, and for the same reason: UpdateItem
+      // creates the item when it is absent, so a PUT naming a workstation that has since been
+      // deleted would write a stub record instead of failing. Creation is POST /workstations and
+      // the state machine behind it, so there is no create-by-PUT here to preserve.
+      ConditionExpression: 'attribute_exists(instanceId)'
     };
     
     // Only add ExpressionAttributeValues if there are values to set
@@ -1283,6 +1289,14 @@ async function updateWorkstation(instanceId, updateData) {
       body: JSON.stringify({ message: 'Workstation updated successfully' })
     };
   } catch (error) {
+    if (error.name === 'ConditionalCheckFailedException') {
+      // The record is gone. Telling the caller that is more use than a 500.
+      return {
+        statusCode: 404,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        body: JSON.stringify({ error: 'Workstation not found' })
+      };
+    }
     console.error('Error updating workstation:', error);
     return {
       statusCode: 500,
