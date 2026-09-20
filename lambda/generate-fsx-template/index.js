@@ -149,6 +149,20 @@ function generateFsxWindowsTemplate(storageId, storageName, configuration, produ
           "WindowsConfiguration": {
             "ThroughputCapacity": {"Ref": "ThroughputCapacity"},
             "AutomaticBackupRetentionDays": {"Ref": "AutomaticBackupRetentionPeriod"},
+            // Backup storage is a charge of its own, and without this it is charged to nobody.
+            // CloudFormation puts the stack tags - ConstellationId, ProjectId, ExternalRef - on
+            // the file system, but FSx takes the daily backup itself and copies none of them onto
+            // it unless told to. The backup is then billed under a backup id, which nothing
+            // outside FSx holds, so no per-project cost query can ever reach it.
+            //
+            // AT CREATION ONLY, for Windows: UpdateFileSystemWindowsConfiguration has no such
+            // field and CloudFormation marks the property Replacement, so it cannot be turned on
+            // for a file system that already exists. That is safe to write here because a storage
+            // stack is only ever created and deleted - update-storage says in its own comment why
+            // it does not call UpdateStack - so this can only reach a stack at creation and no
+            // existing file system is put at risk of replacement by it. Backups of the file
+            // systems that are already out there have to be tagged directly instead.
+            "CopyTagsToBackups": true,
             "DeploymentType": "MULTI_AZ_1",
             "PreferredSubnetId": {"Fn::Join": ["", ["{{resolve:ssm:/", {"Ref": "ProductName"}, "/Network/PrivateSubnet1/SubnetID}}"]]},
             "WeeklyMaintenanceStartTime": "1:05:00",
@@ -410,6 +424,17 @@ function generateFsxOntapTemplate(storageId, storageName, configuration, product
             "SizeInMegabytes": {"Ref": "VolumeSize"},
             "SecurityStyle": {"Ref": "SecurityStyle"},
             "StorageEfficiencyEnabled": true,
+            // The same reason as the Windows file system above: an untagged backup is a real
+            // charge owed by nobody. An ONTAP backup is a backup OF THE VOLUME rather than of the
+            // file system, which is why the flag belongs here and not beside
+            // AutomaticBackupRetentionDays in the file system's OntapConfiguration.
+            //
+            // Unlike Windows, this one is not creation-only: UpdateOntapVolumeConfiguration
+            // accepts CopyTagsToBackups and CloudFormation updates the property with no
+            // interruption, so a volume that already exists can be brought in line with one
+            // UpdateVolume call. The README has the command, under "Storage backups and cost
+            // attribution".
+            "CopyTagsToBackups": true,
             "TieringPolicy": {
               "Name": configuration.tieringPolicy || "AUTO",
               "CoolingPeriod": 31
@@ -686,3 +711,9 @@ exports.handler = async (event) => {
     region: region || PRIMARY_REGION
   };
 };
+
+// The two template builders are pure functions of their arguments, and exporting them is what
+// lets a test assert what the generated template says. Nothing in the deployed path reads these:
+// the handler above calls them directly.
+exports.generateFsxWindowsTemplate = generateFsxWindowsTemplate;
+exports.generateFsxOntapTemplate = generateFsxOntapTemplate;
