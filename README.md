@@ -94,6 +94,38 @@ You are responsible for the cost of the AWS services used while running this sol
 
 We recommend creating a **Budget through AWS Cost Explorer** to help manage costs. Prices are subject to change. For full details, refer to the pricing webpage for each AWS service used.
 
+### Storage backups and cost attribution
+
+A storage resource can carry three reference tags — `ConstellationId`, `ProjectId` and `ExternalRef` — which the storage state machine puts on the CloudFormation stack, and which CloudFormation then applies to every resource in the stack that supports tagging. Activated as cost allocation tags in the payer account, they are what lets a bill be split per project.
+
+**An automatic backup is billed separately from the file system it is a backup of**, and FSx copies none of those tags onto it unless `CopyTagsToBackups` is set. A backup taken without it appears on the bill under a backup id that exists nowhere outside FSx, so its storage cost cannot be attributed to anything. Both generated templates now set the flag, so **a file system created from now on needs nothing done to it**.
+
+Tags are not retroactive on a bill, so each of the following attributes cost from the moment it is run and never for what has already been spent.
+
+**FSx for NetApp ONTAP — existing volumes can be brought in line.** An ONTAP backup is a backup of a volume, and the flag can be changed on a volume that already exists:
+
+```bash
+# The volumes of a file system
+aws fsx describe-volumes --filters Name=file-system-id,Values=fs-0123456789abcdef0 \
+  --query 'Volumes[].VolumeId' --output text
+
+# Copy the volume's tags onto its backups from here on
+aws fsx update-volume --volume-id fsvol-0123456789abcdef0 \
+  --ontap-configuration CopyTagsToBackups=true
+```
+
+**FSx for Windows File Server — existing file systems cannot.** `UpdateFileSystem` has no such field and CloudFormation treats the property as requiring replacement, so an existing file system keeps taking untagged backups until it is replaced. Its exposure is bounded by the retention period, since automatic backups are deleted as they age out and when the file system is deleted.
+
+**A backup that already exists can be tagged by hand**, whichever file system type it belongs to, and stays attributable for the rest of its life:
+
+```bash
+aws fsx describe-backups --filters Name=file-system-id,Values=fs-0123456789abcdef0 \
+  --query 'Backups[].ResourceARN' --output text
+
+aws fsx tag-resource --resource-arn <backup-arn> \
+  --tags Key=ConstellationId,Value=res_abc Key=ProjectId,Value=prj_x
+```
+
 ---
 
 ## Quick Start
