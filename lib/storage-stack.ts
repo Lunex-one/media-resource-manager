@@ -1498,6 +1498,33 @@ export class StorageStack extends cdk.Stack {
     props.storageTable.grantReadWriteData(this.functions.updateStorage);
     props.storageTable.grantReadWriteData(this.functions.deleteStorage);
 
+    // update-storage carries a reference change onto the real AWS resources, so
+    // that a filesystem somebody made by hand and bound afterwards is
+    // attributable on the bill and not only in our own table. See
+    // syncStorageReferenceTags in lambda/update-storage/index.js for why this
+    // does not go through a stack update.
+    //
+    // Tagging only, and no resource condition: an ADOPTED filesystem is by
+    // definition one this deployment did not create, so it carries none of our
+    // tags yet and a condition on them would refuse exactly the case this
+    // exists for. ec2:DescribeInstances takes no resource scope at all.
+    //
+    // fsx:UntagResource and ec2:DeleteTags are here because clearing a
+    // reference is a supported edit — an empty value removes the attribute,
+    // and leaving a stale tag behind on the bill would be worse than the gap
+    // this closes.
+    this.functions.updateStorage.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'fsx:TagResource',
+        'fsx:UntagResource',
+        'ec2:CreateTags',
+        'ec2:DeleteTags',
+        'ec2:DescribeInstances',
+      ],
+      resources: ['*'],
+    }));
+
     // Grant delete-storage permission to read/write DataSync table.
     // It needs to query locations/tasks by storageId, delete task EXECUTION#
     // rows in batches, and delete LOCATION/TASK metadata rows as part of

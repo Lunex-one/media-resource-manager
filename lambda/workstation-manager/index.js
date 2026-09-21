@@ -1216,7 +1216,26 @@ async function updateWorkstation(instanceId, updateData) {
     await dynamodb.send(new UpdateCommand(updateParams));
 
     if (tagsToSet.length > 0 || tagKeysToClear.length > 0) {
-      await syncReferenceTags(instanceId, tagsToSet, tagKeysToClear);
+      const referenceTags = {
+        ...(await syncReferenceTags(instanceId, tagsToSet, tagKeysToClear)),
+        at: new Date().toISOString()
+      };
+
+      // Best effort, and deliberately not fatal: the record is already written
+      // and this is a note about it. Same shape update-storage writes, so a
+      // caller reads one field whichever half of the facility it is asking
+      // about.
+      try {
+        await dynamodb.send(new UpdateCommand({
+          TableName: process.env.WORKSTATION_TABLE_NAME,
+          Key: { instanceId },
+          UpdateExpression: 'SET referenceTagsSync = :sync',
+          ExpressionAttributeValues: { ':sync': referenceTags },
+          ConditionExpression: 'attribute_exists(instanceId)'
+        }));
+      } catch (error) {
+        console.error(`Could not record the reference-tag outcome on ${instanceId}:`, error);
+      }
     }
     
     // If storage config was updated, trigger the appropriate mount manager based on platform
@@ -1333,6 +1352,23 @@ async function ec2ForWorkstation(instanceId) {
  * separately from the instance: tagging only the instance would split one project's cost across a
  * tagged half and an untagged one.
  */
+/**
+ * Carry a reference change onto the instance and every volume attached to it.
+ *
+ * IT USED TO SWALLOW ITS OWN FAILURE with a console.warn, and the cost of that
+ * is worth stating because it is not obvious: a bind could succeed in MRM while
+ * the tags never landed, leaving a workstation whose references are right in
+ * our table and absent from the bill -- and the only trace was a log line in
+ * this account, which the caller that cares cannot read.
+ *
+ * It now returns the outcome and the caller records it. Still not fatal: the
+ * record is already written when this runs, so throwing would make a caller
+ * retry a write that already landed. The difference is that the failure is
+ * visible to whoever asked.
+ *
+ * Tags are not retroactive on a bill, so what this buys is attribution from
+ * here onward and nothing for what the machine has already cost.
+ */
 async function syncReferenceTags(instanceId, tagsToSet, tagKeysToClear) {
   try {
     const { ec2, region } = await ec2ForWorkstation(instanceId);
@@ -1353,8 +1389,15 @@ async function syncReferenceTags(instanceId, tagsToSet, tagKeysToClear) {
       }));
     }
     console.log(`Reference tags updated on ${resources.join(', ')} in ${region}`);
+    return { ok: true, synced: resources, region };
   } catch (error) {
-    console.warn('Failed to update reference tags for instance', instanceId + ':', error.message);
+    console.error(
+      `Reference tags NOT applied for instance ${instanceId}. The record is correct and the bill ` +
+        `will not be: this instance and its volumes are unattributable until the references are ` +
+        `set again.`,
+      error
+    );
+    return { ok: false, error: error.message };
   }
 }
 
