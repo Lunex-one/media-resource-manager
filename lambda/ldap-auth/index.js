@@ -221,13 +221,24 @@ async function authenticateWithLDAP(username, password) {
                     if (attributes.cn) {
                       displayName = displayName || attributes.cn;
                     }
-                    // Discrete name fields for the JIT user record.
+                    // Discrete name fields for the JIT user record. Prefer
+                    // AD's structured givenName/sn attributes; fall back to
+                    // splitting the first non-userId human-looking name we
+                    // can find (displayName -> cn -> name). Some accounts
+                    // (typically service accounts) have none of these set,
+                    // in which case we honestly write empty strings and let
+                    // the frontend fall back to userId in the Name column.
                     if (attributes.givenName) firstName = String(attributes.givenName);
                     if (attributes.sn) lastName = String(attributes.sn);
-                    if (!firstName && !lastName && displayName && displayName !== username) {
-                      const parts = String(displayName).trim().split(/\s+/);
-                      firstName = parts[0] || '';
-                      lastName = parts.slice(1).join(' ') || '';
+                    if (!firstName && !lastName) {
+                      const humanName = [attributes.displayName, attributes.cn, attributes.name]
+                        .map((v) => v && String(v).trim())
+                        .find((v) => v && v !== username);
+                      if (humanName) {
+                        const parts = humanName.split(/\s+/);
+                        firstName = parts[0] || '';
+                        lastName = parts.slice(1).join(' ') || '';
+                      }
                     }
                     
                     // Check multiple possible group attributes
@@ -296,10 +307,21 @@ async function authenticateWithLDAP(username, password) {
         }
         
         exports.handler = async (event) => {
-          console.log('Direct LDAP Auth request for user:', JSON.parse(event.body || '{}').username);
-          
-          const { username, password } = JSON.parse(event.body || '{}');
-          
+          const rawBody = JSON.parse(event.body || '{}');
+          // Normalise UPN ("user@domain.tld") and down-level ("DOMAIN\user")
+          // forms into a bare sAMAccountName. The LDAP search filter below
+          // binds on sAMAccountName only, so the non-canonical forms would
+          // otherwise silently fail to match despite being valid AD
+          // identifiers. Frontend also strips defensively; doing it here
+          // covers direct API callers (curl, integration tests, other
+          // clients) too.
+          const rawUsername = rawBody.username;
+          const username = typeof rawUsername === 'string'
+            ? rawUsername.trim().replace(/^[^\\]+\\/, '').replace(/@.+$/, '')
+            : rawUsername;
+          const password = rawBody.password;
+          console.log('Direct LDAP Auth request for user:', username, rawUsername !== username ? `(normalised from "${rawUsername}")` : '');
+
           if (!username || !password) {
             return {
               statusCode: 400,
