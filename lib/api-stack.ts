@@ -1385,6 +1385,12 @@ export class ApiStack extends cdk.Stack {
     const s3MountIntegration = buildLambdaIntegration(props.storageStack.functions.s3MountManager);
     const nfsMountIntegration = buildLambdaIntegration(props.storageStack.functions.nfsMountManager);
     const listS3BucketsIntegration = buildLambdaIntegration(props.storageStack.functions.listS3Buckets);
+    // Using buildLambdaIntegration (shared apiGatewayInvokeRole), not raw
+    // apigateway.LambdaIntegration - the latter creates a per-method
+    // Lambda::Permission resource, which is exactly what pushed MRM-Api over
+    // CloudFormation's 500-resource limit earlier in this fork's history. See
+    // feedback_cdk_apigateway_stack_split.md.
+    const getStoragePricingIntegration = buildLambdaIntegration(props.storageStack.functions.getStoragePricing);
 
     // API Methods - now using dedicated functions
     workstationsResource.addMethod('GET', workstationIntegration, { authorizer });
@@ -1619,6 +1625,14 @@ export class ApiStack extends cdk.Stack {
     // Storage Config endpoint - GET /storage/config (for cross-account bucket policy generation)
     const storageConfigResource = storageResource.addResource('config');
     storageConfigResource.addMethod('GET', listS3BucketsIntegration, { authorizer });
+
+    // Storage Pricing endpoint - GET /storage/pricing?region=<region>
+    // Returns live AWS Price List rates for FSx storage/throughput/backup
+    // so the create-storage UI can render a monthly cost estimate that
+    // never goes stale. Available to any authenticated user; response
+    // contains only public pricing data.
+    const storagePricingResource = storageResource.addResource('pricing');
+    storagePricingResource.addMethod('GET', getStoragePricingIntegration, { authorizer });
 
     // ===========================================
     // DATASYNC API
