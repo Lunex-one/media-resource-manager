@@ -22,6 +22,7 @@ import {
   Collapse,
   Radio,
   Checkbox,
+  Switch,
 } from 'antd';
 import {
   PlusOutlined,
@@ -254,6 +255,16 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
 
       const requestBody: any = { ...values };
       if (!requestBody.region) delete requestBody.region;
+
+      // FSx Windows: the UI models "disable backups" as a toggle for
+      // discoverability; the backend/CFN model it as retention days = 0.
+      // Coerce here and strip the UI-only field before sending.
+      if (requestBody.type === 'fsx-windows' && requestBody.configuration) {
+        if (requestBody.configuration.enableBackups === false) {
+          requestBody.configuration.automaticBackupRetentionPeriod = 0;
+        }
+        delete requestBody.configuration.enableBackups;
+      }
 
       const response = await apiCall('storage', {
         method: 'POST',
@@ -577,6 +588,10 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
   // conditional form UI. Defaults mirror the API defaults (multi-az + SSD).
   const fsxWindowsResilience = Form.useWatch(['configuration', 'resilience'], createForm) || 'multi-az';
   const fsxWindowsStorageType = Form.useWatch(['configuration', 'storageType'], createForm) || 'SSD';
+  // Backups toggle - when disabled the form suppresses the retention-days
+  // InputNumber and we coerce `automaticBackupRetentionPeriod` to 0 at
+  // submit time. Default true because backups should be the default.
+  const fsxWindowsBackupsEnabled = Form.useWatch(['configuration', 'enableBackups'], createForm) ?? true;
 
   // Fetch S3 buckets and config when Mountpoint S3 is selected
   useEffect(() => {
@@ -764,7 +779,7 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
           }}
           width={600}
         >
-          <Form form={createForm} layout="vertical" initialValues={{ type: 'fsx-ontap', configuration: { teamSize: 'medium', storageCapacity: 2048, volumeSize: 1600, backupRetention: 30, haPairs: 2, ssdStorageCapacity: 256, throughputCapacity: 64, automaticBackupRetentionPeriod: 7, instanceType: 'c5.2xlarge', resilience: 'multi-az', storageType: 'SSD' } }}>
+          <Form form={createForm} layout="vertical" initialValues={{ type: 'fsx-ontap', configuration: { teamSize: 'medium', storageCapacity: 2048, volumeSize: 1600, backupRetention: 30, haPairs: 2, ssdStorageCapacity: 256, throughputCapacity: 64, automaticBackupRetentionPeriod: 7, instanceType: 'c5.2xlarge', resilience: 'multi-az', storageType: 'SSD', enableBackups: true } }}>
             <Form.Item name="name" label="Name" rules={[{ required: true, message: 'Name is required' }]}>
               <Input ref={createNameInputRef} placeholder="Enter storage name" />
             </Form.Item>
@@ -942,9 +957,23 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
                     { label: '2048 MB/s', value: 2048 },
                   ]} />
                 </Form.Item>
-                <Form.Item name={['configuration', 'automaticBackupRetentionPeriod']} label="Backup Retention (days)">
-                  <InputNumber min={0} max={90} style={{ width: '100%' }} />
+                <Form.Item
+                  name={['configuration', 'enableBackups']}
+                  label="Automatic Backups"
+                  valuePropName="checked"
+                  tooltip="When enabled, FSx takes a daily backup and retains it for the specified number of days. Disable to skip backups entirely (not recommended for production)."
+                >
+                  <Switch checkedChildren="Enabled" unCheckedChildren="Disabled" />
                 </Form.Item>
+                {fsxWindowsBackupsEnabled && (
+                  <Form.Item
+                    name={['configuration', 'automaticBackupRetentionPeriod']}
+                    label="Backup Retention (days)"
+                    rules={[{ required: true, message: 'Retention days is required when backups are enabled' }]}
+                  >
+                    <InputNumber min={1} max={90} style={{ width: '100%' }} />
+                  </Form.Item>
+                )}
               </>
             )}
 
