@@ -574,7 +574,7 @@ exports.handler = async (event) => {
         if (!id) return '';
         let normalized = id;
         // Strip known IdP prefixes
-        const knownPrefixes = ['IdentityCenter_', 'Okta_', 'SAML_', 'AzureAD_', 'AmazonFederate_'];
+        const knownPrefixes = ['IdentityCenter_', 'Okta_', 'SAML_', 'AzureAD_', 'EntraID_', 'AmazonFederate_'];
         for (const prefix of knownPrefixes) {
           if (normalized.startsWith(prefix)) {
             normalized = normalized.substring(prefix.length);
@@ -658,7 +658,7 @@ exports.handler = async (event) => {
       const normalizeUserId = (id) => {
         if (!id) return '';
         let normalized = id;
-        const knownPrefixes = ['IdentityCenter_', 'Okta_', 'SAML_', 'AzureAD_', 'AmazonFederate_'];
+        const knownPrefixes = ['IdentityCenter_', 'Okta_', 'SAML_', 'AzureAD_', 'EntraID_', 'AmazonFederate_'];
         for (const prefix of knownPrefixes) {
           if (normalized.startsWith(prefix)) {
             normalized = normalized.substring(prefix.length);
