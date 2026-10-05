@@ -10,6 +10,13 @@ const dynamoClient = new DynamoDBClient({ region: process.env.AWS_REGION });
 const dynamodb = DynamoDBDocumentClient.from(dynamoClient);
 const dataSyncClient = new DataSyncClient({ region: process.env.AWS_REGION });
 
+// DataSync answers every bad request with InvalidRequestException, including a
+// failure to delete the location's ENIs. Only "is not found" means the location is
+// already gone; anything else must be surfaced so the records are kept.
+function isNotFound(error) {
+  return error.name === 'InvalidRequestException' && (error.message || '').includes('not found');
+}
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
@@ -103,7 +110,7 @@ exports.handler = async (event) => {
         console.log('Deleted DataSync location:', location.locationArn);
       } catch (dataSyncError) {
         // If location doesn't exist in DataSync, continue with DynamoDB deletion
-        if (dataSyncError.name !== 'InvalidRequestException') {
+        if (!isNotFound(dataSyncError)) {
           throw dataSyncError;
         }
         console.log('Location not found in DataSync, continuing with DynamoDB deletion');

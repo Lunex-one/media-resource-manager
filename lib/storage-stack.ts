@@ -1253,10 +1253,12 @@ export class StorageStack extends cdk.Stack {
           ],
           Catch: [
             {
+              // The worker already answers a stack that does not exist with
+              // DELETE_COMPLETE, so anything caught here is a real error and the
+              // record must stay, marked delete-failed.
               ErrorEquals: ["States.ALL"],
-              Comment: "Stack not found means it's deleted",
-              Next: "UpdateStatusToDeleted",
-              ResultPath: null
+              Next: "UpdateStatusToDeleteFailed",
+              ResultPath: "$.error"
             }
           ]
         },
@@ -1638,6 +1640,24 @@ export class StorageStack extends cdk.Stack {
         `arn:aws:datasync:${this.region}:${this.account}:task/*`,
         `arn:aws:datasync:${this.region}:${this.account}:location/*`,
       ],
+    }));
+
+    // DataSync deletes the ENIs of a task or location as the calling principal,
+    // so delete-storage needs the same EC2 permissions as the DataSync functions.
+    // Without them DeleteTask fails with "ENI access denied" and the ENIs stay in
+    // the FSx security group, which then blocks the stack delete.
+    this.functions.deleteStorage.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'ec2:DescribeNetworkInterfaces',
+        'ec2:DescribeSubnets',
+        'ec2:DescribeSecurityGroups',
+        'ec2:DescribeVpcs',
+        'ec2:CreateNetworkInterface',
+        'ec2:CreateNetworkInterfacePermission',
+        'ec2:DeleteNetworkInterface',
+      ],
+      resources: ['*'],
     }));
 
     // Grant delete-storage permission to read DataSync table name from SSM
