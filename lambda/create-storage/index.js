@@ -29,6 +29,13 @@ function generateStorageId() {
 }
 
 /**
+ * The three references a caller may attach to a storage resource, as record attributes.
+ *
+ * `constellationId` is the identity a Constellation plan resource is known by, `projectId` the
+ * project it was booked for, and `externalRef` a free-form reference the facility can edit
+ * afterwards. Each is omitted rather than stored as '' so that "nobody set this" stays
+ * distinguishable from "set to nothing", which is the same rule the workstation records follow.
+ */
 function referenceAttributes(data) {
   return {
     ...(data.constellationId && { constellationId: data.constellationId }),
