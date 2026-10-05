@@ -120,21 +120,57 @@ describe('which resources carry them', () => {
     // record keeps both.
     expect(tagTargets(fsxRecord)).toEqual({
       fsxResourceArn: fsxRecord.fsxResourceArn,
+      fsxFileSystemId: 'fs-0123456789abcdef0',
+      ontapVolumes: false,
       instanceId: null
     });
+  });
+
+  test('an ONTAP file system also reaches its volumes, which its backups copy tags from', () => {
+    const ontap = { ...fsxRecord, type: 'fsx-ontap' };
+    expect(tagTargets(ontap).ontapVolumes).toBe(true);
   });
 
   test('a Nexis is reached by its System Director instance', () => {
     expect(tagTargets(nexisRecord)).toEqual({
       fsxResourceArn: null,
+      fsxFileSystemId: null,
+      ontapVolumes: false,
       instanceId: 'i-0123456789abcdef0'
     });
+  });
+
+  test("'N/A' placeholders are not targets", () => {
+    // parse-stack-outputs writes 'N/A' into every id field that does not
+    // apply to the kind it built. Sending that to AWS failed the whole sync
+    // for every storage MRM had built itself.
+    const builtFsx = { ...fsxRecord, systemDirectorInstanceId: 'N/A' };
+    expect(tagTargets(builtFsx).instanceId).toBeNull();
+    expect(tagTargets(builtFsx).fsxResourceArn).toBe(fsxRecord.fsxResourceArn);
+
+    const builtNexis = {
+      ...nexisRecord,
+      fsxResourceArn: 'N/A',
+      fsxFileSystemId: 'N/A'
+    };
+    expect(tagTargets(builtNexis)).toEqual({
+      fsxResourceArn: null,
+      fsxFileSystemId: null,
+      ontapVolumes: false,
+      instanceId: 'i-0123456789abcdef0'
+    });
+    expect(wouldChangeAnything(builtNexis, ['projectId'])).toBe(true);
   });
 
   test('a mountpoint-s3 record owns nothing to tag, and that is not a failure', () => {
     // MRM writes a row, checks the bucket is reachable, and creates no AWS
     // resource. The bucket is somebody else's and so is its cost.
-    expect(tagTargets(mountRecord)).toEqual({ fsxResourceArn: null, instanceId: null });
+    expect(tagTargets(mountRecord)).toEqual({
+      fsxResourceArn: null,
+      fsxFileSystemId: null,
+      ontapVolumes: false,
+      instanceId: null
+    });
     expect(wouldChangeAnything(mountRecord, ['constellationId'])).toBe(false);
   });
 

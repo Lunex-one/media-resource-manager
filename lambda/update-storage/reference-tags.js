@@ -76,11 +76,36 @@ function tagChanges(storage, changedFields) {
  * reachable, and creates no AWS resource — so there is nothing to tag and the
  * empty answer is correct rather than a failure. The bucket belongs to whoever
  * owns it and its cost is theirs.
+ *
+ * THE FILE SYSTEM ID, so index.js can find what FSx made from it: the backups
+ * that already exist, of either kind, and — for ONTAP — the volumes. Those are
+ * billing lines of their own, and none of them follows a tag put on the file
+ * system afterwards. ONTAP backups copy the VOLUME's tags, not the file
+ * system's, so an ONTAP file system tagged alone keeps taking backups that
+ * belong to nobody.
+ *
+ * 'N/A' IS NOT AN ID. When a stack completes, parse-stack-outputs writes the
+ * literal 'N/A' into every id field that does not apply to the kind it built,
+ * so that one shared Step Functions state can always resolve its paths. A
+ * Nexis record therefore carries fsxResourceArn 'N/A', and an FSx record
+ * systemDirectorInstanceId 'N/A'. Treating any non-empty string as a target
+ * sent TagResource('N/A') and DescribeInstances(['N/A']) to AWS, which failed
+ * the whole sync for every storage MRM had built itself. A value counts only
+ * when it has the shape of the thing it names.
  */
 function tagTargets(storage) {
+  const arn = storage?.fsxResourceArn;
+  const fileSystemId = storage?.fsxFileSystemId;
+  const instanceId = storage?.systemDirectorInstanceId;
+  const isFsx = typeof arn === 'string' && arn.startsWith('arn:');
   return {
-    fsxResourceArn: storage?.fsxResourceArn || null,
-    instanceId: storage?.systemDirectorInstanceId || null
+    fsxResourceArn: isFsx ? arn : null,
+    fsxFileSystemId:
+      isFsx && typeof fileSystemId === 'string' && fileSystemId.startsWith('fs-')
+        ? fileSystemId
+        : null,
+    ontapVolumes: isFsx && storage?.type === 'fsx-ontap',
+    instanceId: typeof instanceId === 'string' && instanceId.startsWith('i-') ? instanceId : null
   };
 }
 

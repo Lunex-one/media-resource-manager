@@ -476,6 +476,15 @@ export class StorageStack extends cdk.Stack {
       resources: ['*'] // Cross-region requires wildcard
     }));
 
+    // And to tag that instance's EBS volumes with the caller's references,
+    // which the stack tags do not carry onto volumes Avid's nested template
+    // creates. Volumes only.
+    this.functions.parseStackOutputs.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['ec2:CreateTags'],
+      resources: ['arn:aws:ec2:*:*:volume/*']
+    }));
+
     // Configure ONTAP CIFS Function - enables SMB for non-domain-joined Windows workstations
     // Needs VPC access to SSH to FSxN SVM management endpoint
     // For regional hubs, this Lambda routes to a regional Lambda deployed in the hub's VPC
@@ -989,7 +998,10 @@ export class StorageStack extends cdk.Stack {
           Parameters: {
             "storageType.$": "$.type",
             "stackStatus.$": "$.stackStatus",
-            "region.$": "$.region"
+            "region.$": "$.region",
+            // For tagging the NEXIS System Director's volumes, which the stack
+            // tags do not reach.
+            "references.$": "$.references"
           },
           ResultPath: "$.parsedOutputs",
           Next: "ConfigureOntapCifs",
@@ -1597,11 +1609,19 @@ export class StorageStack extends cdk.Stack {
     // reference is a supported edit — an empty value removes the attribute,
     // and leaving a stale tag behind on the bill would be worse than the gap
     // this closes.
+    //
+    // fsx:DescribeVolumes, fsx:DescribeBackups and fsx:UpdateVolume reach what
+    // FSx made from the file system: its existing backups, and an ONTAP file
+    // system's volumes, whose CopyTagsToBackups is switched on so the backups
+    // taken afterwards carry the references too.
     this.functions.updateStorage.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: [
         'fsx:TagResource',
         'fsx:UntagResource',
+        'fsx:DescribeVolumes',
+        'fsx:DescribeBackups',
+        'fsx:UpdateVolume',
         'ec2:CreateTags',
         'ec2:DeleteTags',
         'ec2:DescribeInstances',

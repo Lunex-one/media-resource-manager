@@ -4,12 +4,38 @@
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
 const { EC2Client, CreateTagsCommand, DeleteTagsCommand, DescribeInstancesCommand } = require('@aws-sdk/client-ec2');
-const { FSxClient, TagResourceCommand, UntagResourceCommand } = require('@aws-sdk/client-fsx');
+const {
+  FSxClient,
+  TagResourceCommand,
+  UntagResourceCommand,
+  DescribeBackupsCommand,
+  DescribeVolumesCommand,
+  UpdateVolumeCommand
+} = require('@aws-sdk/client-fsx');
 const { requireAdmin } = require('./authz');
 const { tagChanges, tagTargets } = require('./reference-tags');
 
 const dynamoClient = new DynamoDBClient({ region: process.env.AWS_REGION });
 const dynamodb = DynamoDBDocumentClient.from(dynamoClient);
+
+/**
+ * Every item an FSx Describe call returns for one file system, across pages.
+ * DescribeVolumes and DescribeBackups take the same `file-system-id` filter and
+ * page the same way, so one helper serves both.
+ */
+async function describeAll(fsx, Command, key, fileSystemId) {
+  const items = [];
+  let NextToken;
+  do {
+    const page = await fsx.send(new Command({
+      Filters: [{ Name: 'file-system-id', Values: [fileSystemId] }],
+      NextToken
+    }));
+    items.push(...(page[key] || []));
+    NextToken = page.NextToken;
+  } while (NextToken);
+  return items;
+}
 
 /**
  * Carry a reference change onto the real AWS resources of a storage record.
@@ -38,7 +64,8 @@ const dynamodb = DynamoDBDocumentClient.from(dynamoClient);
  * (workstation-manager's syncReferenceTags), and a directly-applied tag
  * survives alongside the stack's own.
  *
- * WHAT IT REACHES: the FSx file system by its recorded ARN, and a Nexis System
+ * WHAT IT REACHES: the FSx file system by its recorded ARN, its existing
+ * backups and -- for ONTAP -- its volumes; and a Nexis System
  * Director instance with every volume attached to it -- which is the same set
  * the workstation path covers, and for the same reason: a root volume is a
  * billing line of its own, so a reference that stops at the instance silently
@@ -60,18 +87,51 @@ async function syncStorageReferenceTags(storage, changedFields) {
     return { synced: [], skipped: 'no reference changed' };
   }
 
-  const { fsxResourceArn, instanceId } = tagTargets(storage);
+  const { fsxResourceArn, fsxFileSystemId, ontapVolumes, instanceId } = tagTargets(storage);
 
   // The FSx file system, by the ARN the state machine recorded.
   if (fsxResourceArn) {
     const fsx = new FSxClient({ region });
-    if (setTags.length > 0) {
-      await fsx.send(new TagResourceCommand({ ResourceARN: fsxResourceArn, Tags: setTags }));
+    const retag = async (arn) => {
+      if (setTags.length > 0) {
+        await fsx.send(new TagResourceCommand({ ResourceARN: arn, Tags: setTags }));
+      }
+      if (clearKeys.length > 0) {
+        await fsx.send(new UntagResourceCommand({ ResourceARN: arn, TagKeys: clearKeys }));
+      }
+      applied.push(arn);
+    };
+
+    await retag(fsxResourceArn);
+
+    // An ONTAP file system's volumes, which its backups copy their tags from.
+    // A volume that does not copy its tags to backups yet is switched on, so
+    // the backups taken from now on carry the references too. That is a
+    // property of the volume, not a label, and it is the only way to make
+    // future ONTAP backups attributable. An SVM root volume is left alone:
+    // FSx refuses updates to it and nobody backs it up.
+    if (ontapVolumes && fsxFileSystemId) {
+      for (const volume of await describeAll(fsx, DescribeVolumesCommand, 'Volumes', fsxFileSystemId)) {
+        await retag(volume.ResourceARN);
+        const ontap = volume.OntapConfiguration;
+        if (setTags.length > 0 && ontap && !ontap.StorageVirtualMachineRoot && !ontap.CopyTagsToBackups) {
+          await fsx.send(new UpdateVolumeCommand({
+            VolumeId: volume.VolumeId,
+            OntapConfiguration: { CopyTagsToBackups: true }
+          }));
+        }
+      }
     }
-    if (clearKeys.length > 0) {
-      await fsx.send(new UntagResourceCommand({ ResourceARN: fsxResourceArn, TagKeys: clearKeys }));
+
+    // The backups that already exist. Backup storage is billed for as long as
+    // a backup is kept, and a backup only ever copies tags at the moment it is
+    // taken, so the ones taken before this call would otherwise stay
+    // unattributable until they expire.
+    if (fsxFileSystemId) {
+      for (const backup of await describeAll(fsx, DescribeBackupsCommand, 'Backups', fsxFileSystemId)) {
+        await retag(backup.ResourceARN);
+      }
     }
-    applied.push(fsxResourceArn);
   }
 
   // A Nexis System Director, and every volume attached to it.
