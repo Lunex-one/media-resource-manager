@@ -93,12 +93,7 @@ const DEFAULT_OPTIONS = {
  * All three are optional. A task created from MRM's own console supplies none of them, and such a
  * request behaves exactly as it did before these existed.
  *
- * Recorded, but tagged nowhere. Storage and workstations carry the same three onto the real AWS
- * resources as CloudFormation stack tags, so a cost query can group by them. A task is made here
- * by a direct CreateTask call, and this Lambda's role is granted datasync:CreateTask without
- * datasync:TagResource, so tagging the task would be an IAM change as well as a code one. The
- * record is therefore the only place the correlation lives - enough to find a task again when the
- * response that would have carried its id was lost.
+ * Recorded on the task's row, and tagged onto the DataSync task itself by referenceTags() below.
  */
 function referenceAttributes(data) {
   return {
@@ -106,6 +101,25 @@ function referenceAttributes(data) {
     ...(data.projectId && { projectId: data.projectId }),
     ...(data.externalRef && { externalRef: data.externalRef })
   };
+}
+
+/**
+ * The same references as AWS tags on the task, under the keys storage and workstations use, so a
+ * cost query grouping by ConstellationId or ProjectId reaches transfers too. DataSync bills per
+ * gigabyte copied, and a task without these tags is a line on the bill nobody can attribute.
+ *
+ * Only the references that were given: a task created from MRM's own console carries none, and an
+ * empty tag value would read as "set to nothing" rather than "not set".
+ *
+ * Not ExternalRef. That one is the facility's to edit afterwards, and datasync-update-task changes
+ * the row without touching tags, so an ExternalRef tag would go stale. The two here are set once by
+ * the caller that created the task and never change.
+ */
+function referenceTags(data) {
+  const keys = { constellationId: 'ConstellationId', projectId: 'ProjectId' };
+  return Object.entries(keys)
+    .filter(([field]) => data[field])
+    .map(([field, Key]) => ({ Key, Value: String(data[field]) }));
 }
 
 // Validate location compatibility (S3 <-> FSx only)
@@ -291,6 +305,10 @@ exports.handler = async (event) => {
       Name: name,
       Options: dataSyncOptions
     };
+    const tags = referenceTags(body);
+    if (tags.length > 0) {
+      createTaskParams.Tags = tags;
+    }
     
     // Determine the region for the task from the location ARNs
     // DataSync tasks are created in the same region as the locations

@@ -418,6 +418,10 @@ export class DataSyncStack extends cdk.Stack {
         'datasync:DescribeLocation*',
         'datasync:ListLocations',
         'datasync:CreateTask',
+        // CreateTask with Tags needs TagResource as well. The task carries the
+        // caller's ConstellationId and ProjectId so its per-GB cost can be
+        // attributed (lambda/datasync-create-task referenceTags).
+        'datasync:TagResource',
         'datasync:UpdateTask',
         'datasync:DeleteTask',
         'datasync:DescribeTask',

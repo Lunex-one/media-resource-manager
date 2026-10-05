@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-const { EC2Client, DescribeInstancesCommand } = require('@aws-sdk/client-ec2');
+const { EC2Client, DescribeInstancesCommand, CreateTagsCommand } = require('@aws-sdk/client-ec2');
 
 /**
  * Parse CloudFormation Stack Outputs Lambda
@@ -16,7 +16,7 @@ const { EC2Client, DescribeInstancesCommand } = require('@aws-sdk/client-ec2');
 exports.handler = async (event) => {
   console.log('ParseStackOutputs received event:', JSON.stringify(event, null, 2));
   
-  const { storageType, stackStatus, region } = event;
+  const { storageType, stackStatus, region, references } = event;
   const outputs = stackStatus?.Stacks?.[0]?.Outputs || [];
   
   // Convert outputs array to a map for easy lookup by OutputKey
@@ -44,7 +44,7 @@ exports.handler = async (event) => {
       break;
 
     case 'nexis':
-      result = await parseNexisOutputs(outputMap, region);
+      result = await parseNexisOutputs(outputMap, region, references);
       break;
       
     default:
@@ -103,16 +103,21 @@ function parseFsxOntapOutputs(outputMap) {
  * ONTAP's SVM DNS (resolved separately at mount time since it can involve additional
  * setup), the System Director's IP is stable once created, so it's resolved once here.
  */
-async function parseNexisOutputs(outputMap, region) {
+async function parseNexisOutputs(outputMap, region, references) {
   const instanceId = outputMap.SystemDirector;
   let privateIp = 'N/A';
   if (instanceId && instanceId !== 'N/A') {
+    const ec2 = new EC2Client({ region: region || process.env.AWS_REGION });
+    let instance;
     try {
-      const ec2 = new EC2Client({ region: region || process.env.AWS_REGION });
       const described = await ec2.send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }));
-      privateIp = described.Reservations?.[0]?.Instances?.[0]?.PrivateIpAddress || 'N/A';
+      instance = described.Reservations?.[0]?.Instances?.[0];
+      privateIp = instance?.PrivateIpAddress || 'N/A';
     } catch (err) {
       console.error(`Failed to resolve private IP for System Director instance ${instanceId}:`, err);
+    }
+    if (instance) {
+      await tagNexisVolumes(ec2, instance, references);
     }
   }
   return {
@@ -126,6 +131,36 @@ async function parseNexisOutputs(outputMap, region) {
     fsxDnsName: 'N/A',
     fsxResourceArn: 'N/A'
   };
+}
+
+/**
+ * Put the caller's ConstellationId and ProjectId on the System Director's EBS volumes.
+ *
+ * The stack tags reach the instance, but the volumes are made by Avid's nested ec2-sd.yaml, which
+ * this repository does not hold, and CloudFormation does not carry stack tags onto volumes made
+ * from an instance's block device mappings. The 632 GiB metadata volume alone is a billing line of
+ * its own, so tagging stops short of the cost unless it reaches the disks. update-storage does the
+ * same when a reference is set afterwards.
+ *
+ * Best effort: a tagging failure is logged and the stack's outputs are still returned, because the
+ * storage exists and works either way.
+ */
+async function tagNexisVolumes(ec2, instance, references) {
+  const tags = [
+    ['constellationId', 'ConstellationId'],
+    ['projectId', 'ProjectId']
+  ]
+    .filter(([field]) => references?.[field])
+    .map(([field, Key]) => ({ Key, Value: String(references[field]) }));
+  const volumeIds = (instance.BlockDeviceMappings || [])
+    .map((mapping) => mapping.Ebs?.VolumeId)
+    .filter(Boolean);
+  if (tags.length === 0 || volumeIds.length === 0) return;
+  try {
+    await ec2.send(new CreateTagsCommand({ Resources: volumeIds, Tags: tags }));
+  } catch (err) {
+    console.error(`Failed to tag System Director volumes ${volumeIds.join(', ')}:`, err);
+  }
 }
 
 /**
