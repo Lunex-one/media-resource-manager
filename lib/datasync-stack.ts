@@ -449,6 +449,10 @@ export class DataSyncStack extends cdk.Stack {
     // DataSync also creates and deletes its ENIs as the calling principal, so DeleteTask and
     // DeleteLocation need them too; without them the delete fails with "ENI access denied"
     // and the ENIs are left in the FSx security group.
+    // DataSync removes an ENI by setting deleteOnTermination on its attachment
+    // (ec2:ModifyNetworkInterfaceAttribute, on instance/*) before anything is deleted, so that
+    // action is the one a delete is refused on first. The DataSync service role above and AWS's
+    // AWSDataSyncFullAccess policy both carry it.
     const ec2PermissionsForDataSync = new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: [
@@ -459,6 +463,7 @@ export class DataSyncStack extends cdk.Stack {
         'ec2:CreateNetworkInterface',
         'ec2:CreateNetworkInterfacePermission',
         'ec2:DeleteNetworkInterface',
+        'ec2:ModifyNetworkInterfaceAttribute',
       ],
       resources: ['*'],
     });

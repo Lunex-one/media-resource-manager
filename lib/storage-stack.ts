@@ -1666,6 +1666,9 @@ export class StorageStack extends cdk.Stack {
     // so delete-storage needs the same EC2 permissions as the DataSync functions.
     // Without them DeleteTask fails with "ENI access denied" and the ENIs stay in
     // the FSx security group, which then blocks the stack delete.
+    // ModifyNetworkInterfaceAttribute is the call DataSync makes first — it sets
+    // deleteOnTermination on each ENI's attachment — and the one it is refused on
+    // without it. See the matching statement in datasync-stack.ts.
     this.functions.deleteStorage.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: [
@@ -1676,6 +1679,7 @@ export class StorageStack extends cdk.Stack {
         'ec2:CreateNetworkInterface',
         'ec2:CreateNetworkInterfacePermission',
         'ec2:DeleteNetworkInterface',
+        'ec2:ModifyNetworkInterfaceAttribute',
       ],
       resources: ['*'],
     }));
