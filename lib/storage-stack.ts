@@ -1253,10 +1253,12 @@ export class StorageStack extends cdk.Stack {
           ],
           Catch: [
             {
+              // The worker already answers a stack that does not exist with
+              // DELETE_COMPLETE, so anything caught here is a real error and the
+              // record must stay, marked delete-failed.
               ErrorEquals: ["States.ALL"],
-              Comment: "Stack not found means it's deleted",
-              Next: "UpdateStatusToDeleted",
-              ResultPath: null
+              Next: "UpdateStatusToDeleteFailed",
+              ResultPath: "$.error"
             }
           ]
         },

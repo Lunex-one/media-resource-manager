@@ -4,7 +4,7 @@
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, GetCommand, DeleteCommand, UpdateCommand, QueryCommand, BatchWriteCommand } = require('@aws-sdk/lib-dynamodb');
 const { SFNClient, StartExecutionCommand } = require('@aws-sdk/client-sfn');
-const { CloudFormationClient, DescribeStacksCommand, DeleteStackCommand } = require('@aws-sdk/client-cloudformation');
+const { CloudFormationClient, DescribeStacksCommand } = require('@aws-sdk/client-cloudformation');
 const { SSMClient, GetParameterCommand } = require('@aws-sdk/client-ssm');
 const { DataSyncClient, DeleteTaskCommand, DeleteLocationCommand } = require('@aws-sdk/client-datasync');
 const { requireAdmin } = require('./authz');
@@ -370,27 +370,20 @@ exports.handler = async (event) => {
       }
     }
     
-    // Handle cases where we can delete directly without Step Functions
+    // Handle cases where we can delete the record directly, because no stack is left:
     // 1. No stack name (creation never got that far)
     // 2. Stack doesn't exist (already deleted or never created)
-    // 3. Stack is in ROLLBACK_COMPLETE (failed and rolled back)
-    // 4. Stack is in DELETE_COMPLETE
-    const directDeleteStatuses = ['ROLLBACK_COMPLETE', 'DELETE_COMPLETE', 'CREATE_FAILED', 'DELETE_FAILED'];
+    // 3. Stack is in DELETE_COMPLETE
+    //
+    // A stack that still exists (ROLLBACK_COMPLETE, CREATE_FAILED, DELETE_FAILED, ...)
+    // goes through the deletion state machine below. Its worker holds the permissions
+    // the stack's resources need, since CloudFormation deletes them as the caller, and
+    // the state machine only removes the record once the stack reaches DELETE_COMPLETE;
+    // otherwise it leaves the record delete-failed with the error.
+    const directDeleteStatuses = ['DELETE_COMPLETE'];
     
     if (!stackName || !stackExists || (stackStatus && directDeleteStatuses.includes(stackStatus))) {
       console.log(`Direct delete: stackName=${stackName}, stackExists=${stackExists}, stackStatus=${stackStatus}`);
-      
-      // If stack exists in ROLLBACK_COMPLETE or DELETE_FAILED, try to delete it
-      if (stackExists && (stackStatus === 'ROLLBACK_COMPLETE' || stackStatus === 'DELETE_FAILED')) {
-        try {
-          console.log(`Deleting rolled back/failed stack: ${stackName}`);
-          await cfn.send(new DeleteStackCommand({ StackName: stackName }));
-          console.log(`Stack deletion initiated for: ${stackName}`);
-        } catch (error) {
-          console.warn(`Could not delete stack ${stackName}: ${error.message}`);
-          // Continue with DynamoDB deletion even if stack deletion fails
-        }
-      }
       
       // Delete the DynamoDB record directly
       await dynamodb.send(new DeleteCommand({
