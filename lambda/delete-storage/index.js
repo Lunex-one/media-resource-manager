@@ -35,6 +35,13 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'DELETE,OPTIONS'
 };
 
+// DataSync answers every bad request with InvalidRequestException, including a
+// failure to delete a task's or location's ENIs. Only "is not found" means the
+// resource is already gone; anything else must be surfaced so the records are kept.
+function isNotFound(error) {
+  return error.name === 'InvalidRequestException' && (error.message || '').includes('not found');
+}
+
 /**
  * Get DataSync table name from SSM parameter (cached after first fetch)
  */
@@ -80,8 +87,9 @@ async function getDataSyncTableName() {
  *   3. For each task: call DataSync DeleteTask, delete TASK + EXECUTION# rows
  *   4. For each location: call DataSync DeleteLocation, delete LOCATION row
  *
- * "Already gone" errors (InvalidRequestException from DataSync) are logged
- * and treated as success so partial-failure retries converge.
+ * "Already gone" errors (InvalidRequestException saying "not found") are
+ * logged and treated as success so partial-failure retries converge. Any other
+ * DataSync error is recorded and the item's records are kept.
  */
 async function deleteDataSyncTasksAndLocations(storageId) {
   const dataSyncTableName = await getDataSyncTableName();
@@ -138,7 +146,7 @@ async function deleteDataSyncTasksAndLocations(storageId) {
             await dataSyncClient.send(new DeleteTaskCommand({ TaskArn: task.taskArn }));
             console.log(`Deleted DataSync task ${task.taskArn}`);
           } catch (e) {
-            if (e.name === 'InvalidRequestException') {
+            if (isNotFound(e)) {
               console.log(`DataSync task ${task.taskArn} already gone`);
             } else {
               throw e;
@@ -187,7 +195,7 @@ async function deleteDataSyncTasksAndLocations(storageId) {
             await dataSyncClient.send(new DeleteLocationCommand({ LocationArn: location.locationArn }));
             console.log(`Deleted DataSync location ${location.locationArn}`);
           } catch (e) {
-            if (e.name === 'InvalidRequestException') {
+            if (isNotFound(e)) {
               console.log(`DataSync location ${location.locationArn} already gone`);
             } else {
               throw e;

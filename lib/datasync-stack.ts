@@ -441,7 +441,10 @@ export class DataSyncStack extends cdk.Stack {
     this.functions.getExecutions.addToRolePolicy(dataSyncPolicy);
 
     // Grant comprehensive EC2 permissions required by DataSync for FSx locations
-    // DataSync needs these to validate network configuration when creating FSx locations and tasks
+    // DataSync needs these to validate network configuration when creating FSx locations and tasks.
+    // DataSync also creates and deletes its ENIs as the calling principal, so DeleteTask and
+    // DeleteLocation need them too; without them the delete fails with "ENI access denied"
+    // and the ENIs are left in the FSx security group.
     const ec2PermissionsForDataSync = new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: [
@@ -457,6 +460,8 @@ export class DataSyncStack extends cdk.Stack {
     });
     this.functions.createLocation.addToRolePolicy(ec2PermissionsForDataSync);
     this.functions.createTask.addToRolePolicy(ec2PermissionsForDataSync);
+    this.functions.deleteLocation.addToRolePolicy(ec2PermissionsForDataSync);
+    this.functions.deleteTask.addToRolePolicy(ec2PermissionsForDataSync);
 
     // Grant S3 list buckets permission
     this.functions.listS3Buckets.addToRolePolicy(new iam.PolicyStatement({
