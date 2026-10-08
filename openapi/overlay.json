@@ -1076,6 +1076,10 @@
         "configuration": {
           "type": "object"
         },
+        "managedBucket": {
+          "type": "boolean",
+          "description": "mountpoint-s3 only. true when MRM created the bucket itself (configuration.createBucket on create); absent for a bucket MRM only points at. DELETE /storage/{storageId} keeps the bucket either way."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time"
@@ -1122,7 +1126,7 @@
         },
         "configuration": {
           "type": "object",
-          "description": "Type-specific; see docs/API.md."
+          "description": "Type-specific; see docs/API.md. For mountpoint-s3, either bucketName (an existing bucket) or createBucket: true, which makes MRM create a new bucket named <acronym>-storage-<storageId> in the request's region, with public access blocked, SSE-S3 encryption, a policy refusing non-TLS requests, and ConstellationId/ProjectId tags when sent. createBucket with bucketName is refused with 400."
         },
         "constellationId": {
           "type": "string",
@@ -3238,7 +3242,7 @@
     },
     "POST /storage": {
       "summary": "Provision a storage resource",
-      "description": "Returns 201 once accepted; provisioning continues in a nested CloudFormation stack. Poll GET /storage/{storageId}.",
+      "description": "Returns 201 once accepted; provisioning continues in a nested CloudFormation stack. Poll GET /storage/{storageId}. A mountpoint-s3 request returns 201 with the resource already available; with configuration.createBucket the bucket has been created by then, and if creating it failed the response is 500 and neither a bucket nor a record is left.",
       "requestBody": {
         "required": true,
         "content": {
@@ -3261,7 +3265,7 @@
           }
         },
         "400": {
-          "description": "Name and configuration are required.",
+          "description": "Name and configuration are required, or the type-specific configuration is invalid (for example createBucket together with bucketName).",
           "content": {
             "application/json": {
               "schema": {
@@ -3328,7 +3332,8 @@
             }
           }
         }
-      }
+      },
+      "description": "A mountpoint-s3 record is deleted at once and its bucket is kept, including a bucket MRM created (managedBucket: true); removing that bucket is a separate step outside MRM."
     },
     "POST /storage/mount": {
       "summary": "Mount or unmount a Mountpoint-S3 volume",
