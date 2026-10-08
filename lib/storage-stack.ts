@@ -583,6 +583,9 @@ export class StorageStack extends cdk.Stack {
         // SSM parameters when validating a Single-AZ FSx-Windows availability
         // zone request against the AZs this deployment actually has.
         PASCAL_CASE_NAME: props.pascalCaseName,
+        // ACRONYM names the buckets create-storage makes for `createBucket: true`
+        // (<acronym>-storage-<storageId>), which the grant below is limited to.
+        ACRONYM: props.acronym,
       },
     });
     // Allow the create-storage Lambda to read /{Pascal}/Network/PrivateSubnet*
@@ -1698,6 +1701,23 @@ export class StorageStack extends cdk.Stack {
       effect: iam.Effect.ALLOW,
       actions: ['s3:ListBucket', 's3:GetBucketLocation'],
       resources: ['arn:aws:s3:::*'],
+    }));
+
+    // Let create-storage create and configure a bucket for a mountpoint-s3 request with
+    // `createBucket: true`, and delete it again if configuring it fails (see
+    // lambda/create-storage/managed-bucket.js). Limited to the names MRM gives such buckets,
+    // so this role cannot create, re-policy or delete any other bucket in the account.
+    this.functions.createStorage.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        's3:CreateBucket',
+        's3:PutBucketPublicAccessBlock',
+        's3:PutEncryptionConfiguration',
+        's3:PutBucketPolicy',
+        's3:PutBucketTagging',
+        's3:DeleteBucket',
+      ],
+      resources: [`arn:aws:s3:::${props.acronym.toLowerCase()}-storage-*`],
     }));
 
     // Grant KMS permissions if tables use customer-managed encryption

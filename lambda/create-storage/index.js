@@ -8,6 +8,13 @@ const { S3Client, HeadBucketCommand, GetBucketLocationCommand } = require('@aws-
 const { SSMClient, GetParameterCommand } = require('@aws-sdk/client-ssm');
 const crypto = require('crypto');
 const { requireAdmin } = require('./authz');
+const {
+  validateCreateBucketRequest,
+  managedBucketName,
+  bucketTags,
+  createManagedBucket,
+  deleteUnrecordedBucket
+} = require('./managed-bucket');
 
 const dynamoClient = new DynamoDBClient({ region: process.env.AWS_REGION });
 const dynamodb = DynamoDBDocumentClient.from(dynamoClient);
@@ -230,10 +237,28 @@ exports.handler = async (event) => {
  * Create Mountpoint for S3 storage resource
  * This is a lightweight storage type - just saves config to DynamoDB
  * No CloudFormation or state machine needed
+ *
+ * With `configuration.createBucket: true`, MRM first creates the bucket itself (see
+ * managed-bucket.js) in the requested region, and records `managedBucket: true` so the record
+ * says the bucket was made by MRM rather than only pointed at. Everything after that - mount path
+ * handling, the record, the mount flow - is the same as for an existing bucket.
  */
 async function createMountpointS3Storage(storageId, data, configuration, createdAt, targetRegion) {
+  const createBucket = configuration.createBucket === true;
+  const createBucketError = validateCreateBucketRequest(configuration);
+  if (createBucketError) {
+    return {
+      statusCode: 400,
+      headers: corsHeaders,
+      body: JSON.stringify({
+        success: false,
+        error: createBucketError
+      })
+    };
+  }
+
   // Validate S3-specific fields
-  if (!configuration.bucketName) {
+  if (!createBucket && !configuration.bucketName) {
     return {
       statusCode: 400,
       headers: corsHeaders,
@@ -244,21 +269,51 @@ async function createMountpointS3Storage(storageId, data, configuration, created
     };
   }
 
-  // Validate bucket exists and is accessible
-  try {
-    await new S3Client({ region: targetRegion || process.env.AWS_REGION }).send(new HeadBucketCommand({ Bucket: configuration.bucketName }));
-    console.log(`Bucket ${configuration.bucketName} exists and is accessible`);
-  } catch (error) {
-    console.error('Bucket validation failed for', configuration.bucketName + ':', error);
-    return {
-      statusCode: 400,
-      headers: corsHeaders,
-      body: JSON.stringify({
-        success: false,
-        error: `Cannot access S3 bucket: ${configuration.bucketName}. Ensure the bucket exists and the Lambda has permission to access it.`
-      })
-    };
+  let bucketName = configuration.bucketName;
+  if (createBucket) {
+    // Create the bucket before anything is recorded. createManagedBucket deletes the bucket again
+    // if any step after CreateBucket fails, so on an error there is neither a bucket nor a record.
+    try {
+      bucketName = managedBucketName(process.env.ACRONYM, storageId);
+      await createManagedBucket(new S3Client({ region: targetRegion }), {
+        bucketName,
+        region: targetRegion,
+        tags: bucketTags(data)
+      });
+      console.log(`Created bucket ${bucketName} in ${targetRegion}`);
+    } catch (error) {
+      console.error(`Bucket creation failed for ${bucketName || storageId}:`, error);
+      return {
+        statusCode: 500,
+        headers: corsHeaders,
+        body: JSON.stringify({
+          success: false,
+          error: 'Failed to create S3 bucket',
+          details: error.message
+        })
+      };
+    }
+  } else {
+    // Validate bucket exists and is accessible
+    try {
+      await new S3Client({ region: targetRegion || process.env.AWS_REGION }).send(new HeadBucketCommand({ Bucket: bucketName }));
+      console.log(`Bucket ${bucketName} exists and is accessible`);
+    } catch (error) {
+      console.error('Bucket validation failed for', bucketName + ':', error);
+      return {
+        statusCode: 400,
+        headers: corsHeaders,
+        body: JSON.stringify({
+          success: false,
+          error: `Cannot access S3 bucket: ${bucketName}. Ensure the bucket exists and the Lambda has permission to access it.`
+        })
+      };
+    }
   }
+
+  // The stored configuration carries the bucket name either way, because the console's bucket
+  // views read it from there rather than from the top-level attribute.
+  const storedConfiguration = createBucket ? { ...configuration, bucketName } : configuration;
 
   // Normalize mount path - a bare drive letter (e.g. "Y" or "Y:") is a Windows
   // mount target and must NOT get a leading slash, since this same storage
@@ -281,13 +336,18 @@ async function createMountpointS3Storage(storageId, data, configuration, created
 
   // Resolve the bucket's actual region (rather than just recording the region this
   // Lambda happens to run in) so the UI and any per-region tooling (e.g. Windows rclone
-  // mounts) show/use the bucket's real location.
+  // mounts) show/use the bucket's real location. A bucket MRM just created is in the
+  // region it was created in, so there is nothing to look up.
   let region = process.env.AWS_REGION;
-  try {
-    const loc = await s3.send(new GetBucketLocationCommand({ Bucket: configuration.bucketName }));
-    region = loc.LocationConstraint || 'us-east-1';
-  } catch (error) {
-    console.error(`Failed to resolve bucket region for ${configuration.bucketName}, falling back to Lambda's home region:`, error);
+  if (createBucket) {
+    region = targetRegion;
+  } else {
+    try {
+      const loc = await s3.send(new GetBucketLocationCommand({ Bucket: bucketName }));
+      region = loc.LocationConstraint || 'us-east-1';
+    } catch (error) {
+      console.error(`Failed to resolve bucket region for ${bucketName}, falling back to Lambda's home region:`, error);
+    }
   }
 
   const item = {
@@ -299,7 +359,10 @@ async function createMountpointS3Storage(storageId, data, configuration, created
     status: 'available', // Immediately available since no infrastructure to create
     platform: 'linux', // Mountpoint only supports Linux
     region: region, // S3 is global but we track where config was created
-    bucketName: configuration.bucketName,
+    bucketName: bucketName,
+    // Only on a bucket MRM created. DELETE /storage/{id} still keeps the bucket (see
+    // delete-storage); the flag says who made it, not that deleting the record removes it.
+    ...(createBucket && { managedBucket: true }),
     prefix: configuration.prefix || '',
     mountPath: mountPath,
     accessMode: accessMode,
@@ -308,18 +371,28 @@ async function createMountpointS3Storage(storageId, data, configuration, created
     uid: uid,
     gid: gid,
     cachePath: configuration.cachePath || '',
-    // Recorded, but tagged nowhere: this type creates no AWS resource of its own, it points at a
-    // bucket somebody else owns, so there is nothing here for a cost query to group.
+    // For a bucket MRM only points at, recorded but tagged nowhere: the bucket is somebody
+    // else's, and so is its cost. A bucket MRM created already carries ConstellationId and
+    // ProjectId as tags, set by createManagedBucket above.
     ...referenceAttributes(data),
-    configuration
+    configuration: storedConfiguration
   };
 
   console.log('Creating Mountpoint for S3 storage item:', item);
 
-  await dynamodb.send(new PutCommand({
-    TableName: process.env.STORAGE_TABLE_NAME,
-    Item: item
-  }));
+  try {
+    await dynamodb.send(new PutCommand({
+      TableName: process.env.STORAGE_TABLE_NAME,
+      Item: item
+    }));
+  } catch (error) {
+    // A bucket MRM created but never recorded would be invisible to MRM and still exist, so it
+    // goes the same way as one whose configuration failed. The outer handler reports the error.
+    if (createBucket) {
+      await deleteUnrecordedBucket(new S3Client({ region: targetRegion }), bucketName);
+    }
+    throw error;
+  }
 
   console.log('Mountpoint for S3 storage created successfully');
 
@@ -335,7 +408,8 @@ async function createMountpointS3Storage(storageId, data, configuration, created
         status: 'available',
         platform: 'linux',
         region: region,
-        bucketName: configuration.bucketName,
+        bucketName: bucketName,
+        ...(createBucket && { managedBucket: true }),
         prefix: configuration.prefix || '',
         mountPath: mountPath,
         accessMode: accessMode,
@@ -345,7 +419,7 @@ async function createMountpointS3Storage(storageId, data, configuration, created
         gid: gid,
         cachePath: configuration.cachePath || '',
         ...referenceAttributes(data),
-        configuration,
+        configuration: storedConfiguration,
         createdAt
       }
     })

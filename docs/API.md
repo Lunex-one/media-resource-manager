@@ -337,7 +337,10 @@ project's cost quietly going missing. A volume added later through
 `POST /workstations/volumes/add` copies the three from the workstation's record. A storage resource
 gets them as CloudFormation stack tags, which CloudFormation applies to every resource in the stack
 that supports tagging — the FSx file system, its SVM and volume, the security group, a NEXIS
-instance. `mountpoint-s3` is recorded only: it creates no AWS resource of its own.
+instance. `mountpoint-s3` pointing at an existing bucket is recorded only: it creates no AWS
+resource of its own. A bucket MRM creates for `mountpoint-s3` (`createBucket: true`, below) gets
+`ConstellationId` and `ProjectId` when they are sent, but not `ExternalRef`, which the facility edits
+afterwards and would go stale on the bucket.
 
 Two deliberate gaps. **macOS dedicated hosts carry none of them**: a host is allocated only when no
 free one exists, is reused by whatever workstation needs it next, and outlives any single instance,
@@ -607,6 +610,44 @@ The three references are optional and sit at the top level of the body, not insi
 changes the record and not those tags.
 
 The mount routes take `action` of `mount` or `unmount`.
+
+#### `mountpoint-s3`: an existing bucket, or one MRM creates
+
+By default a `mountpoint-s3` request registers a bucket that already exists:
+`configuration.bucketName` is required, MRM checks it can reach the bucket, and records it. No AWS
+resource is created, and the `201` means the resource is already `available`.
+
+With `configuration.createBucket: true`, MRM creates the bucket first and then records it the same
+way. Mounting it is unchanged.
+
+```json
+{
+  "name": "Project Foo media",
+  "type": "mountpoint-s3",
+  "region": "eu-central-1",
+  "projectId": "…",
+  "configuration": { "createBucket": true, "mountPath": "/mnt/media", "accessMode": "read-write" }
+}
+```
+
+- `bucketName` must not be sent with `createBucket` (`400`). MRM names the bucket
+  `<acronym>-storage-<storageId>`, lower case, and returns it as `bucketName` (also copied into the
+  stored `configuration`).
+- The bucket is created in the top-level `region`, which is checked against the regional hubs as for
+  any storage. It cannot change afterwards.
+- MRM fixes the rest: a general purpose bucket, all four Public Access Block settings on, SSE-S3
+  (`AES256`) default encryption, a bucket policy that denies any request not made over TLS, S3's
+  default object ownership (ACLs disabled), no versioning, and the `ConstellationId` / `ProjectId`
+  tags when those are sent.
+- If any step after the bucket is created fails, MRM deletes the empty bucket again and answers
+  `500` with the reason in `details`. No record is written in that case.
+- The record carries `managedBucket: true`, so a bucket MRM created can be told from one it only
+  points at.
+
+**`DELETE /storage/{storageId}` keeps the bucket**, for a created bucket as for an existing one. It
+deletes the record only, and for a `managedBucket` record the response message names the bucket that
+was kept. This is deliberate: the bucket holds media, and removing it is a separate step outside
+MRM. `PUT /storage/{storageId}` is unchanged and does not touch the bucket.
 
 ### DataSync
 

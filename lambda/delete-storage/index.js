@@ -316,21 +316,29 @@ exports.handler = async (event) => {
       };
     }
     
-    // For Mountpoint S3 storage (no CloudFormation stack), just delete the DynamoDB record
+    // For Mountpoint S3 storage (no CloudFormation stack), just delete the DynamoDB record.
+    //
+    // The bucket is kept, and that includes a bucket MRM created itself (managedBucket: true).
+    // This is deliberate, not a missing clean-up: the bucket holds media, S3 refuses to delete a
+    // bucket that is not empty, and emptying it here would destroy that media on a record delete.
+    // Removing such a bucket stays a deliberate step outside MRM. Do not add a DeleteBucket here.
     if (storage.type === 'mountpoint-s3') {
       await dynamodb.send(new DeleteCommand({
         TableName: process.env.STORAGE_TABLE_NAME,
         Key: { storageId }
       }));
-      
-      console.log(`Deleted Mountpoint S3 storage record: ${storageId}`);
-      
+
+      console.log(`Deleted Mountpoint S3 storage record: ${storageId}` +
+        (storage.managedBucket ? ` (bucket ${storage.bucketName} kept)` : ''));
+
       return {
         statusCode: 200,
         headers: corsHeaders,
         body: JSON.stringify({
           success: true,
-          message: 'Storage deleted successfully',
+          message: storage.managedBucket
+            ? `Storage deleted successfully. The S3 bucket ${storage.bucketName} was kept.`
+            : 'Storage deleted successfully',
           storageId
         })
       };
