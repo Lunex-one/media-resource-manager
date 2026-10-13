@@ -8,6 +8,7 @@ const { EC2Client, DescribeInstancesCommand } = require('@aws-sdk/client-ec2');
 const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
 const { FSxClient, DescribeStorageVirtualMachinesCommand } = require('@aws-sdk/client-fsx');
 const { requireAdmin } = require('./authz');
+const scripts = require('./scripts');
 
 // DynamoDB client for primary region (workstation table is in primary region)
 const dynamoClient = new DynamoDBClient({ region: process.env.AWS_REGION });
@@ -216,7 +217,7 @@ async function updateAllMountScripts() {
 async function getStorageForInstance(instanceId, workstation, isDomainJoined, workstationRegion) {
     if (!workstation.storageConfig) {
         // Generate empty script to clear any existing mounts
-        const loginScript = generateLoginScript([], isDomainJoined, null, null);
+        const loginScript = scripts.generateLoginScript([], isDomainJoined, null, null);
         await deployLoginScript(instanceId, loginScript, workstationRegion);
         return [];
     }
@@ -368,7 +369,7 @@ async function getStorageForInstance(instanceId, workstation, isDomainJoined, wo
     }
     
     // Generate and deploy script - pass the credentials map for FSxN
-    const loginScript = generateLoginScript(storageConfigs, isDomainJoined, credentials, domainName, ontapCredentialsMap);
+    const loginScript = scripts.generateLoginScript(storageConfigs, isDomainJoined, credentials, domainName, ontapCredentialsMap);
     await deployLoginScript(instanceId, loginScript, workstationRegion);
     
     return storageConfigs;
@@ -400,273 +401,6 @@ async function getAllWorkstationInstances() {
     return result.Items || [];
 }
 
-function generateLoginScript(storageConfig, isDomainJoined, credentials, domainName, ontapCredentialsMap = {}) {
-    const mountCommands = storageConfig.map(storage => {
-        const driveLetter = storage.driveLetter || 'Z';
-        
-        // Handle FSxN storage type
-        if (storage.type === 'fsx-ontap') {
-            // Get credentials for this specific storage
-            const ontapCredentials = ontapCredentialsMap[storage.storageId] || null;
-            return generateFsxOntapMountCommand(storage, driveLetter, ontapCredentials);
-        }
-        
-        // Handle FSx Windows storage type
-        const fsxDnsName = storage.fsxDnsName;
-        const shareName = 'share';
-        
-        if (isDomainJoined) {
-            // Domain-joined: use integrated Windows authentication
-            return generateDomainJoinedMountCommand(storage, driveLetter, fsxDnsName, shareName);
-        } else {
-            // Non-domain-joined: use explicit credentials
-            return generateStandaloneMountCommand(storage, driveLetter, fsxDnsName, shareName, credentials, domainName);
-        }
-    }).join('\n');
-
-    return `# FSx Storage Mount Script - Auto-generated
-# This script runs at user login to mount FSx file systems
-# Generated on: $(Get-Date)
-# Domain-joined: ${isDomainJoined}
-
-# Set execution policy for this session
-Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
-
-# Log file
-$logFile = "C:\\Windows\\Temp\\fsx-mount-log.txt"
-$timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-
-try {
-    Add-Content -Path $logFile -Value "[$timestamp] Starting FSx mount for user: $env:USERNAME (Domain-joined: ${isDomainJoined})"
-    
-    # Clear any existing FSx network drive mappings to prevent conflicts
-    Add-Content -Path $logFile -Value "[$timestamp] Clearing existing FSx network drive mappings"
-    $existingDrives = net use | Select-String "\\\\.*\\.(studio|fsx)\\." 
-    foreach ($drive in $existingDrives) {
-        $driveLetter = ($drive -split "\\s+")[1]
-        if ($driveLetter -match "^[A-Z]:$") {
-            net use $driveLetter /delete /y 2>$null
-            Add-Content -Path $logFile -Value "[$timestamp] Removed existing mapping: $driveLetter"
-        }
-    }
-    
-    ${mountCommands}
-    
-    Add-Content -Path $logFile -Value "[$timestamp] FSx mount completed successfully for user: $env:USERNAME"
-    
-    # Minimal refresh - just notify shell of drive changes (non-disruptive)
-    Add-Content -Path $logFile -Value "[$timestamp] Refreshing drive display"
-    rundll32.exe shell32.dll,SHChangeNotify 0x8000000,0x1000,0,0
-    
-    Write-Host "FSx mount script completed. Check $logFile for details."
-    
-} catch {
-    $errorMsg = "FSx mount script failed: $_"
-    Add-Content -Path $logFile -Value "[$timestamp] ERROR: $errorMsg"
-    Write-Error $errorMsg
-}
-`;
-}
-
-function generateDomainJoinedMountCommand(storage, driveLetter, fsxDnsName, shareName) {
-    return `
-# Mount ${storage.name} to ${driveLetter}: (Domain-joined - using integrated auth)
-try {
-    $networkPath = "\\\\${fsxDnsName}\\${shareName}"
-    
-    # Remove existing mapping if it exists
-    net use ${driveLetter}: /delete /y 2>$null
-    
-    # Mount using net use with integrated Windows authentication
-    $result = net use ${driveLetter}: "$networkPath" /persistent:yes
-    
-    if ($LASTEXITCODE -eq 0) {
-        # Fix "Disconnected Network Drive" display issue with comprehensive registry fix
-        $regPath = "HKCU:\\Network\\${driveLetter}"
-        if (!(Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
-        Set-ItemProperty -Path $regPath -Name "RemotePath" -Value "$networkPath"
-        Set-ItemProperty -Path $regPath -Name "UserName" -Value ""
-        Set-ItemProperty -Path $regPath -Name "ProviderName" -Value "Microsoft Windows Network"
-        Set-ItemProperty -Path $regPath -Name "ProviderType" -Value 0x20000 -Type DWord
-        Set-ItemProperty -Path $regPath -Name "ConnectionType" -Value 1 -Type DWord
-        Set-ItemProperty -Path $regPath -Name "DeferFlags" -Value 4 -Type DWord
-        
-        # Set custom label for network drive in Explorer
-        $labelPath = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\MountPoints2\\##$($networkPath.Replace('\\', '#'))"
-        if (!(Test-Path $labelPath)) { New-Item -Path $labelPath -Force | Out-Null }
-        Set-ItemProperty -Path $labelPath -Name "_LabelFromReg" -Value "${storage.name}"
-        
-        Write-Host "Successfully mounted ${storage.name} to ${driveLetter}: ($networkPath)"
-        Add-Content -Path $logFile -Value "[$timestamp] Successfully mounted ${storage.name} to ${driveLetter}:"
-    } else {
-        throw "net use failed with exit code $LASTEXITCODE"
-    }
-    
-} catch {
-    Write-Warning "Failed to mount ${storage.name} to ${driveLetter}: $_"
-    Add-Content -Path $logFile -Value "[$timestamp] ERROR: Failed to mount ${storage.name}: $_"
-}`;
-}
-
-function generateStandaloneMountCommand(storage, driveLetter, fsxDnsName, shareName, credentials, domainName) {
-    if (!credentials || !domainName) {
-        return `
-# Mount ${storage.name} to ${driveLetter}: (Standalone - CREDENTIALS NOT AVAILABLE)
-Write-Warning "Cannot mount ${storage.name} - AD credentials not configured for standalone workstation"
-Add-Content -Path $logFile -Value "[$timestamp] ERROR: Cannot mount ${storage.name} - AD credentials not available for standalone workstation"`;
-    }
-    
-    // For standalone workstations, we need to use explicit credentials
-    // The credentials are embedded in the script - this is stored securely on the workstation
-    const username = `${domainName}\\${credentials.username}`;
-    
-    // Escape password for PowerShell single-quoted string
-    // In single-quoted strings, only single quotes need escaping (by doubling them)
-    const escapedPassword = credentials.password.replace(/'/g, "''");
-    
-    return `
-# Mount ${storage.name} to ${driveLetter}: (Standalone - using explicit credentials)
-try {
-    $networkPath = "\\\\${fsxDnsName}\\${shareName}"
-    $username = "${username}"
-    $password = '${escapedPassword}'
-    
-    # Remove existing mapping if it exists
-    net use ${driveLetter}: /delete /y 2>$null
-    
-    # Mount using net use with explicit credentials
-    $result = net use ${driveLetter}: "$networkPath" /user:$username $password /persistent:yes
-    
-    if ($LASTEXITCODE -eq 0) {
-        # Fix "Disconnected Network Drive" display issue with comprehensive registry fix
-        $regPath = "HKCU:\\Network\\${driveLetter}"
-        if (!(Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
-        Set-ItemProperty -Path $regPath -Name "RemotePath" -Value "$networkPath"
-        Set-ItemProperty -Path $regPath -Name "UserName" -Value "$username"
-        Set-ItemProperty -Path $regPath -Name "ProviderName" -Value "Microsoft Windows Network"
-        Set-ItemProperty -Path $regPath -Name "ProviderType" -Value 0x20000 -Type DWord
-        Set-ItemProperty -Path $regPath -Name "ConnectionType" -Value 1 -Type DWord
-        Set-ItemProperty -Path $regPath -Name "DeferFlags" -Value 4 -Type DWord
-        
-        # Set custom label for network drive in Explorer
-        $labelPath = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\MountPoints2\\##$($networkPath.Replace('\\', '#'))"
-        if (!(Test-Path $labelPath)) { New-Item -Path $labelPath -Force | Out-Null }
-        Set-ItemProperty -Path $labelPath -Name "_LabelFromReg" -Value "${storage.name}"
-        
-        Write-Host "Successfully mounted ${storage.name} to ${driveLetter}: ($networkPath) using explicit credentials"
-        Add-Content -Path $logFile -Value "[$timestamp] Successfully mounted ${storage.name} to ${driveLetter}: (standalone mode)"
-    } else {
-        throw "net use failed with exit code $LASTEXITCODE"
-    }
-    
-} catch {
-    Write-Warning "Failed to mount ${storage.name} to ${driveLetter}: $_"
-    Add-Content -Path $logFile -Value "[$timestamp] ERROR: Failed to mount ${storage.name}: $_"
-}`;
-}
-
-/**
- * Generate mount command for FSx for NetApp ONTAP (SMB on Windows)
- * FSxN uses SVM DNS name and share name for mounting
- */
-function generateFsxOntapMountCommand(storage, driveLetter, ontapCredentials) {
-    // FSxN mount path: \\svm-dns-name\share-name
-    const svmDnsName = storage.svmDnsName || storage.fsxDnsName;
-    // Use share name from credentials (set by configure-ontap-cifs), or fall back to vol1
-    const shareName = ontapCredentials?.shareName || storage.shareName || 'vol1';
-    
-    if (!svmDnsName) {
-        return `
-# Mount ${storage.name} to ${driveLetter}: (FSxN - SVM DNS NAME NOT AVAILABLE)
-Write-Warning "Cannot mount ${storage.name} - SVM DNS name not available"
-Add-Content -Path $logFile -Value "[$timestamp] ERROR: Cannot mount ${storage.name} - SVM DNS name not available"`;
-    }
-    
-    // If we have ONTAP credentials, use them; otherwise try without credentials (guest access)
-    if (ontapCredentials && ontapCredentials.username && ontapCredentials.password) {
-        const escapedPassword = ontapCredentials.password.replace(/'/g, "''");
-        
-        return `
-# Mount ${storage.name} to ${driveLetter}: (FSxN - using ONTAP local user)
-try {
-    $networkPath = "\\\\${svmDnsName}\\${shareName}"
-    $username = "${ontapCredentials.username}"
-    $password = '${escapedPassword}'
-    
-    # Remove existing mapping if it exists
-    net use ${driveLetter}: /delete /y 2>$null
-    
-    # Mount using net use with ONTAP local user credentials
-    $result = net use ${driveLetter}: "$networkPath" /user:$username $password /persistent:yes
-    
-    if ($LASTEXITCODE -eq 0) {
-        # Fix "Disconnected Network Drive" display issue
-        $regPath = "HKCU:\\Network\\${driveLetter}"
-        if (!(Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
-        Set-ItemProperty -Path $regPath -Name "RemotePath" -Value "$networkPath"
-        Set-ItemProperty -Path $regPath -Name "UserName" -Value "$username"
-        Set-ItemProperty -Path $regPath -Name "ProviderName" -Value "Microsoft Windows Network"
-        Set-ItemProperty -Path $regPath -Name "ProviderType" -Value 0x20000 -Type DWord
-        Set-ItemProperty -Path $regPath -Name "ConnectionType" -Value 1 -Type DWord
-        Set-ItemProperty -Path $regPath -Name "DeferFlags" -Value 4 -Type DWord
-        
-        # Set custom label for network drive in Explorer
-        $labelPath = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\MountPoints2\\##$($networkPath.Replace('\\', '#'))"
-        if (!(Test-Path $labelPath)) { New-Item -Path $labelPath -Force | Out-Null }
-        Set-ItemProperty -Path $labelPath -Name "_LabelFromReg" -Value "${storage.name}"
-        
-        Write-Host "Successfully mounted ${storage.name} (FSxN) to ${driveLetter}: ($networkPath)"
-        Add-Content -Path $logFile -Value "[$timestamp] Successfully mounted ${storage.name} (FSxN) to ${driveLetter}:"
-    } else {
-        throw "net use failed with exit code $LASTEXITCODE"
-    }
-    
-} catch {
-    Write-Warning "Failed to mount ${storage.name} (FSxN) to ${driveLetter}: $_"
-    Add-Content -Path $logFile -Value "[$timestamp] ERROR: Failed to mount ${storage.name} (FSxN): $_"
-}`;
-    } else {
-        // Try without credentials - may work if guest access is enabled or user is prompted
-        return `
-# Mount ${storage.name} to ${driveLetter}: (FSxN - no stored credentials)
-try {
-    $networkPath = "\\\\${svmDnsName}\\${shareName}"
-    
-    # Remove existing mapping if it exists
-    net use ${driveLetter}: /delete /y 2>$null
-    
-    # Try to mount - Windows may prompt for credentials or use cached credentials
-    $result = net use ${driveLetter}: "$networkPath" /persistent:yes
-    
-    if ($LASTEXITCODE -eq 0) {
-        # Fix "Disconnected Network Drive" display issue
-        $regPath = "HKCU:\\Network\\${driveLetter}"
-        if (!(Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
-        Set-ItemProperty -Path $regPath -Name "RemotePath" -Value "$networkPath"
-        Set-ItemProperty -Path $regPath -Name "UserName" -Value ""
-        Set-ItemProperty -Path $regPath -Name "ProviderName" -Value "Microsoft Windows Network"
-        Set-ItemProperty -Path $regPath -Name "ProviderType" -Value 0x20000 -Type DWord
-        Set-ItemProperty -Path $regPath -Name "ConnectionType" -Value 1 -Type DWord
-        Set-ItemProperty -Path $regPath -Name "DeferFlags" -Value 4 -Type DWord
-        
-        # Set custom label for network drive in Explorer
-        $labelPath = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\MountPoints2\\##$($networkPath.Replace('\\', '#'))"
-        if (!(Test-Path $labelPath)) { New-Item -Path $labelPath -Force | Out-Null }
-        Set-ItemProperty -Path $labelPath -Name "_LabelFromReg" -Value "${storage.name}"
-        
-        Write-Host "Successfully mounted ${storage.name} (FSxN) to ${driveLetter}: ($networkPath)"
-        Add-Content -Path $logFile -Value "[$timestamp] Successfully mounted ${storage.name} (FSxN) to ${driveLetter}:"
-    } else {
-        throw "net use failed with exit code $LASTEXITCODE - credentials may be required"
-    }
-    
-} catch {
-    Write-Warning "Failed to mount ${storage.name} (FSxN) to ${driveLetter}: $_ - You may need to configure ONTAP credentials"
-    Add-Content -Path $logFile -Value "[$timestamp] ERROR: Failed to mount ${storage.name} (FSxN): $_ - ONTAP credentials may be required"
-}`;
-    }
-}
-
 async function deployLoginScript(instanceId, scriptContent, workstationRegion) {
     const ec2 = getEC2Client(workstationRegion);
     const ssm = getSSMClient(workstationRegion);
@@ -685,36 +419,7 @@ async function deployLoginScript(instanceId, scriptContent, workstationRegion) {
         DocumentName: 'AWS-RunPowerShellScript',
         InstanceIds: [instanceId],
         Parameters: {
-            commands: [
-                '# Deploy FSx Login Script',
-                'if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {',
-                '    Write-Error "This script requires Administrator privileges"',
-                '    exit 1',
-                '}',
-                '',
-                '# Create login script directory',
-                '$scriptPath = "C:\\Windows\\System32\\GroupPolicy\\User\\Scripts\\Logon"',
-                'if (!(Test-Path $scriptPath)) {',
-                '    New-Item -Path $scriptPath -ItemType Directory -Force',
-                '}',
-                '',
-                '# Write the FSx mount script',
-                '$scriptFile = "$scriptPath\\MountFsxStorage.ps1"',
-                `$scriptContent = @'`,
-                scriptContent,
-                `'@`,
-                '$scriptContent | Out-File $scriptFile -Encoding UTF8',
-                '',
-                '# Trigger the scheduled task to run immediately for current user',
-                'try {',
-                '    Start-ScheduledTask -TaskName "FSxMountScript" -ErrorAction SilentlyContinue',
-                '    Write-Host "Triggered FSx mount script to run immediately"',
-                '} catch {',
-                '    Write-Host "Could not trigger scheduled task (may not exist yet): $_"',
-                '}',
-                '',
-                'Write-Host "FSx login script deployed successfully to $scriptFile"'
-            ]
+            commands: scripts.deployCommands(scriptContent)
         },
         Comment: `Deploy FSx mount login script for instance ${instanceId}`
     };
