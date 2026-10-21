@@ -23,6 +23,7 @@ import { RegionalHubStack } from '../lib/regional-hub-stack';
 import { DataSyncStack } from '../lib/datasync-stack';
 import { ObservabilityStack } from '../lib/observability-stack';
 import { AgentCoreStack } from '../lib/agentcore-stack';
+import { IdentityBrokerStack } from '../lib/identity-broker-stack';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
@@ -207,17 +208,24 @@ const env = {
 };
 
 // Optional OIDC broker (Keycloak) in front of the directory. Off unless identityBroker=true.
-// This only validates the flags so a misconfigured deployment fails at synth with a clear
-// message; the stack that uses them is added separately.
+// A misconfigured deployment fails at synth with a clear message.
 const identityBrokerEnabled = getContextOrParameter('identityBroker') === 'true';
-if (
-  identityBrokerEnabled &&
-  !(getContextOrParameter('identityBrokerHostname') && getContextOrParameter('identityBrokerCertificateArn'))
-) {
-  throw new Error(
-    'identityBroker=true requires identityBrokerHostname and identityBrokerCertificateArn ' +
-      '(pipeline parameters IdentityBrokerHostname and IdentityBrokerCertificateArn).'
-  );
+if (identityBrokerEnabled) {
+  const missing = [
+    'identityBrokerHostname',
+    'identityBrokerCertificateArn',
+    'identityBrokerMailDomain',
+    'identityBrokerRedirectUri',
+  ].filter((key) => !getContextOrParameter(key));
+  if (missing.length > 0) {
+    throw new Error(
+      `identityBroker=true requires ${missing.join(', ')} ` +
+        `(pipeline parameters ${missing.map((key) => key.charAt(0).toUpperCase() + key.slice(1)).join(', ')}).`
+    );
+  }
+  if ((getContextOrParameter('adMode') || 'managed').toLowerCase() !== 'managed') {
+    throw new Error('identityBroker=true currently supports adMode=managed only.');
+  }
 }
 
 // Core Infrastructure stack (foundational infrastructure)
@@ -239,6 +247,23 @@ const infrastructureStack = new InfrastructureStack(app, `${naming.acronym}-Infr
   adMode,
   adConnectorConfig,
 });
+
+// Optional OIDC broker (Keycloak) with LDAP federation to the directory.
+if (identityBrokerEnabled) {
+  const identityBrokerStack = new IdentityBrokerStack(app, `${naming.acronym}-Identity-Broker`, {
+    env,
+    pascalCaseName: naming.pascalCase,
+    acronym: naming.acronym,
+    vpc: infrastructureStack.network.vpc,
+    hostname: getContextOrParameter('identityBrokerHostname')!,
+    certificateArn: getContextOrParameter('identityBrokerCertificateArn')!,
+    mailDomain: getContextOrParameter('identityBrokerMailDomain')!,
+    redirectUri: getContextOrParameter('identityBrokerRedirectUri')!,
+    directoryDomainName: getContextOrParameter('domainName') || 'studio.mrm.internal',
+    keycloakImage: getContextOrParameter('identityBrokerImage') || 'quay.io/keycloak/keycloak:26.8.1',
+  });
+  identityBrokerStack.addDependency(infrastructureStack);
+}
 
 // DCV Infrastructure stack
 const dcvCertificateContent = loadCertificateFile(getContextOrParameter('dcvCertificateFile'));

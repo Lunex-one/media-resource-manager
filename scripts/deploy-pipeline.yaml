@@ -52,6 +52,8 @@ Metadata:
           - IdentityBrokerHostname
           - IdentityBrokerCertificateArn
           - IdentityBrokerImage
+          - IdentityBrokerMailDomain
+          - IdentityBrokerRedirectUri
       - Label:
           default: "Workstation Settings"
         Parameters:
@@ -115,6 +117,10 @@ Metadata:
         default: "Identity Broker ACM Certificate ARN"
       IdentityBrokerImage:
         default: "Identity Broker Image (optional)"
+      IdentityBrokerMailDomain:
+        default: "Identity Broker Mail Domain"
+      IdentityBrokerRedirectUri:
+        default: "Identity Broker Client Redirect URI"
       UseCognitoAuth:
         default: "Use Cognito / SAML Authentication"
       IdentityCenterSyncGroups:
@@ -315,6 +321,25 @@ Parameters:
     Description: >
       Optional Keycloak container image override (for example an ECR mirror
       with a pinned tag). Empty uses the stack's default image.
+
+  IdentityBrokerMailDomain:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$'
+    ConstraintDescription: Must be empty or a lowercase mail domain (for example studio.example.com).
+    Description: >
+      Mail domain of the directory users who may sign in through the broker.
+      Required when IdentityBroker=true.
+
+  IdentityBrokerRedirectUri:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^https://[^\s]+$'
+    ConstraintDescription: Must be empty or an https URL.
+    Description: >
+      Redirect URI of the relying party that signs users in through the broker
+      (for example https://auth.example.com/auth/connections/callback).
+      Required when IdentityBroker=true.
 
   HostnamePrefix:
     Type: String
@@ -709,6 +734,10 @@ Resources:
             Value: !Ref IdentityBrokerCertificateArn
           - Name: MRM_IDENTITY_BROKER_IMAGE
             Value: !Ref IdentityBrokerImage
+          - Name: MRM_IDENTITY_BROKER_MAIL_DOMAIN
+            Value: !Ref IdentityBrokerMailDomain
+          - Name: MRM_IDENTITY_BROKER_REDIRECT_URI
+            Value: !Ref IdentityBrokerRedirectUri
           - Name: MRM_HOSTNAME_PREFIX
             Value: !Ref HostnamePrefix
           - Name: MRM_HOSTNAME_DIGITS
@@ -892,6 +921,8 @@ Resources:
                         IdentityBrokerHostname: process.env.MRM_IDENTITY_BROKER_HOSTNAME || '',
                         IdentityBrokerCertificateArn: process.env.MRM_IDENTITY_BROKER_CERTIFICATE_ARN || '',
                         IdentityBrokerImage: process.env.MRM_IDENTITY_BROKER_IMAGE || '',
+                        IdentityBrokerMailDomain: process.env.MRM_IDENTITY_BROKER_MAIL_DOMAIN || '',
+                        IdentityBrokerRedirectUri: process.env.MRM_IDENTITY_BROKER_REDIRECT_URI || '',
                         HostnamePrefix: process.env.MRM_HOSTNAME_PREFIX || 'vdi-',
                         HostnameDigits: process.env.MRM_HOSTNAME_DIGITS || '4',
                         IdentityCenterSyncGroups: process.env.MRM_IDENTITY_CENTER_SYNC_GROUPS || '',
@@ -971,6 +1002,8 @@ Resources:
                         MRM_IDENTITY_BROKER_HOSTNAME: 'IdentityBrokerHostname',
                         MRM_IDENTITY_BROKER_CERTIFICATE_ARN: 'IdentityBrokerCertificateArn',
                         MRM_IDENTITY_BROKER_IMAGE: 'IdentityBrokerImage',
+                        MRM_IDENTITY_BROKER_MAIL_DOMAIN: 'IdentityBrokerMailDomain',
+                        MRM_IDENTITY_BROKER_REDIRECT_URI: 'IdentityBrokerRedirectUri',
                         MRM_HOSTNAME_PREFIX: 'HostnamePrefix',
                         MRM_HOSTNAME_DIGITS: 'HostnameDigits',
                         MRM_IDENTITY_CENTER_SYNC_GROUPS: 'IdentityCenterSyncGroups',
