@@ -46,6 +46,13 @@ Metadata:
           - SsoUserPoolClientId
           - SsoUserPoolDomain
       - Label:
+          default: "Identity Broker (Keycloak, optional)"
+        Parameters:
+          - IdentityBroker
+          - IdentityBrokerHostname
+          - IdentityBrokerCertificateArn
+          - IdentityBrokerImage
+      - Label:
           default: "Workstation Settings"
         Parameters:
           - HostnamePrefix
@@ -100,6 +107,14 @@ Metadata:
         default: "Customer AD NetBIOS Name (connector mode, optional)"
       AdConnectorDescription:
         default: "AD Connector Description (connector mode, optional)"
+      IdentityBroker:
+        default: "Deploy Identity Broker (Keycloak)"
+      IdentityBrokerHostname:
+        default: "Identity Broker Hostname"
+      IdentityBrokerCertificateArn:
+        default: "Identity Broker ACM Certificate ARN"
+      IdentityBrokerImage:
+        default: "Identity Broker Image (optional)"
       UseCognitoAuth:
         default: "Use Cognito / SAML Authentication"
       IdentityCenterSyncGroups:
@@ -266,6 +281,40 @@ Parameters:
       Optional (AdMode=connector only). Human-readable description
       shown in the Directory Service console. Directory Service does
       not allow parentheses in this field.
+
+  IdentityBroker:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >
+      Deploy the optional MRM-Identity-Broker stack (Keycloak OIDC provider with
+      LDAP federation to the directory). Requires IdentityBrokerHostname and
+      IdentityBrokerCertificateArn. Leave 'false' for a standard deployment.
+
+  IdentityBrokerHostname:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$'
+    ConstraintDescription: Must be empty or a lowercase DNS hostname (for example idp.example.com).
+    Description: >
+      Public hostname for the broker (for example idp.example.com).
+      Required when IdentityBroker=true.
+
+  IdentityBrokerCertificateArn:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^arn:aws:acm:[a-z0-9-]+:[0-9]{12}:certificate/[a-zA-Z0-9-]+$'
+    ConstraintDescription: Must be empty or an ACM certificate ARN.
+    Description: >
+      ARN of the ACM certificate for IdentityBrokerHostname, in the region the
+      broker is deployed to. Required when IdentityBroker=true.
+
+  IdentityBrokerImage:
+    Type: String
+    Default: ''
+    Description: >
+      Optional Keycloak container image override (for example an ECR mirror
+      with a pinned tag). Empty uses the stack's default image.
 
   HostnamePrefix:
     Type: String
@@ -652,6 +701,14 @@ Resources:
             Value: !Ref AdNetbiosName
           - Name: MRM_AD_CONNECTOR_DESCRIPTION
             Value: !Ref AdConnectorDescription
+          - Name: MRM_IDENTITY_BROKER
+            Value: !Ref IdentityBroker
+          - Name: MRM_IDENTITY_BROKER_HOSTNAME
+            Value: !Ref IdentityBrokerHostname
+          - Name: MRM_IDENTITY_BROKER_CERTIFICATE_ARN
+            Value: !Ref IdentityBrokerCertificateArn
+          - Name: MRM_IDENTITY_BROKER_IMAGE
+            Value: !Ref IdentityBrokerImage
           - Name: MRM_HOSTNAME_PREFIX
             Value: !Ref HostnamePrefix
           - Name: MRM_HOSTNAME_DIGITS
@@ -831,6 +888,10 @@ Resources:
                         AdConnectorSize: process.env.MRM_AD_CONNECTOR_SIZE || '',
                         AdNetbiosName: process.env.MRM_AD_NETBIOS_NAME || '',
                         AdConnectorDescription: process.env.MRM_AD_CONNECTOR_DESCRIPTION || '',
+                        IdentityBroker: process.env.MRM_IDENTITY_BROKER || 'false',
+                        IdentityBrokerHostname: process.env.MRM_IDENTITY_BROKER_HOSTNAME || '',
+                        IdentityBrokerCertificateArn: process.env.MRM_IDENTITY_BROKER_CERTIFICATE_ARN || '',
+                        IdentityBrokerImage: process.env.MRM_IDENTITY_BROKER_IMAGE || '',
                         HostnamePrefix: process.env.MRM_HOSTNAME_PREFIX || 'vdi-',
                         HostnameDigits: process.env.MRM_HOSTNAME_DIGITS || '4',
                         IdentityCenterSyncGroups: process.env.MRM_IDENTITY_CENTER_SYNC_GROUPS || '',
@@ -906,6 +967,10 @@ Resources:
                         MRM_AD_CONNECTOR_SIZE: 'AdConnectorSize',
                         MRM_AD_NETBIOS_NAME: 'AdNetbiosName',
                         MRM_AD_CONNECTOR_DESCRIPTION: 'AdConnectorDescription',
+                        MRM_IDENTITY_BROKER: 'IdentityBroker',
+                        MRM_IDENTITY_BROKER_HOSTNAME: 'IdentityBrokerHostname',
+                        MRM_IDENTITY_BROKER_CERTIFICATE_ARN: 'IdentityBrokerCertificateArn',
+                        MRM_IDENTITY_BROKER_IMAGE: 'IdentityBrokerImage',
                         MRM_HOSTNAME_PREFIX: 'HostnamePrefix',
                         MRM_HOSTNAME_DIGITS: 'HostnameDigits',
                         MRM_IDENTITY_CENTER_SYNC_GROUPS: 'IdentityCenterSyncGroups',
