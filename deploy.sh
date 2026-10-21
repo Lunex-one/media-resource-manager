@@ -302,6 +302,21 @@ if [ "$CURRENT_REGION" != "us-east-1" ]; then
     fi
 fi
 
+# Optional: synthesize only, deploying nothing, to validate a change (including cdk-nag findings)
+# without touching the environment. MRM_SYNTH_CONTEXT may carry extra CDK context, for example
+# MRM_SYNTH_CONTEXT="-c identityBroker=true -c identityBrokerHostname=idp.example.com".
+if [ "${MRM_SYNTH_ONLY:-}" = "true" ]; then
+    print_status "Synth-only mode: synthesizing without deploying"
+    # shellcheck disable=SC2086
+    if npx cdk synth --quiet ${MRM_SYNTH_CONTEXT:-}; then
+        print_success "Synthesis succeeded (nothing deployed)"
+        exit 0
+    else
+        print_error "Synthesis failed"
+        exit 1
+    fi
+fi
+
 # Deploy all stacks
 print_status "🏗️  Deploying all infrastructure stacks..."
 CDK_OUTPUT=$(mktemp)
