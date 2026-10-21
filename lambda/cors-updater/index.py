@@ -28,12 +28,31 @@ def send_response(event, context, status, data=None):
     print(f"Response status: {response.status}")
 
 
+def cognito_auth_enabled(ssm, pascal_case_name):
+    """False only for an LDAP-only deployment (UseCognitoAuth=false).
+
+    Anything else counts as Cognito on, including a missing parameter or a read
+    error, which matches config-generator's default.
+    """
+    try:
+        value = ssm.get_parameter(Name=f'/{pascal_case_name}/Auth/UseCognitoAuth')['Parameter']['Value']
+    except Exception as e:
+        print(f'Could not read UseCognitoAuth, assuming Cognito is enabled: {e}')
+        return True
+    return value != 'false'
+
+
 def update_cognito_callback_urls(frontend_url, pascal_case_name):
     """Update Cognito User Pool Client callback URLs with the real frontend URL"""
     ssm = boto3.client('ssm')
     cognito = boto3.client('cognito-idp')
     
     try:
+        # An LDAP-only deployment has no User Pool, so there is nothing to update
+        if not cognito_auth_enabled(ssm, pascal_case_name):
+            print('UseCognitoAuth is false (LDAP-only), skipping Cognito callback URL update')
+            return False
+
         # Get User Pool ID and Client ID from SSM
         user_pool_id = ssm.get_parameter(Name=f'/{pascal_case_name}/Auth/UserPoolId')['Parameter']['Value']
         client_id = ssm.get_parameter(Name=f'/{pascal_case_name}/Auth/UserPoolClientId')['Parameter']['Value']
