@@ -206,6 +206,20 @@ const env = {
   region: process.env.CDK_DEFAULT_REGION || 'us-east-1',
 };
 
+// Optional OIDC broker (Keycloak) in front of the directory. Off unless identityBroker=true.
+// This only validates the flags so a misconfigured deployment fails at synth with a clear
+// message; the stack that uses them is added separately.
+const identityBrokerEnabled = getContextOrParameter('identityBroker') === 'true';
+if (
+  identityBrokerEnabled &&
+  !(getContextOrParameter('identityBrokerHostname') && getContextOrParameter('identityBrokerCertificateArn'))
+) {
+  throw new Error(
+    'identityBroker=true requires identityBrokerHostname and identityBrokerCertificateArn ' +
+      '(pipeline parameters IdentityBrokerHostname and IdentityBrokerCertificateArn).'
+  );
+}
+
 // Core Infrastructure stack (foundational infrastructure)
 const infrastructureStack = new InfrastructureStack(app, `${naming.acronym}-Infrastructure`, {
   env,
