@@ -305,7 +305,16 @@ fi
 # Deploy all stacks
 print_status "🏗️  Deploying all infrastructure stacks..."
 CDK_OUTPUT=$(mktemp)
-if npx cdk deploy --all --require-approval never 2>&1 | tee "$CDK_OUTPUT"; then
+# Optional: deploy only the named stacks (space-separated, e.g. MRM_DEPLOY_STACKS="MRM-Storage").
+# Needed to update a consumer stack before its producer, for instance to drop a cross-stack
+# import before the exporting stack removes it. Unset deploys everything.
+if [ -n "${MRM_DEPLOY_STACKS:-}" ]; then
+    print_status "Deploying only: ${MRM_DEPLOY_STACKS}"
+    CDK_DEPLOY_TARGET="${MRM_DEPLOY_STACKS} --exclusively"
+else
+    CDK_DEPLOY_TARGET="--all"
+fi
+if npx cdk deploy ${CDK_DEPLOY_TARGET} --require-approval never 2>&1 | tee "$CDK_OUTPUT"; then
     print_success "All stacks deployed successfully"
 else
     print_error "Failed to deploy stacks"
