@@ -11,6 +11,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as path from 'path';
 import { Construct } from 'constructs';
+import { WorkstationRecordGuard } from './workstation-record-guard';
 
 interface WorkstationCreationStackProps extends cdk.StackProps {
   productName: string;
@@ -554,12 +555,17 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
       }
     });
 
+    // Every write below requires the workstation record to exist, and a build whose record
+    // was deleted under it ends in guard.deleted. See lib/workstation-record-guard.ts.
+    const guard = new WorkstationRecordGuard(this);
+
     // Task to update status to failed when SSM install command fails
-    const updateStatusSsmInstallFailed = new tasks.CallAwsService(this, 'UpdateStatusSsmInstallFailed', {
+    const updateStatusSsmInstallFailed = guard.protect(new tasks.CallAwsService(this, 'UpdateStatusSsmInstallFailed', {
       service: 'dynamodb',
       action: 'updateItem',
       parameters: {
         'TableName': props.workstationTable.tableName,
+        'ConditionExpression': WorkstationRecordGuard.CONDITION,
         'Key': {
           'instanceId': {
             'S.$': '$.instanceId'
@@ -586,14 +592,15 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
       },
       resultPath: '$.updateResult',
       iamResources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/${props.workstationTable.tableName}`]
-    });
+    }));
 
     // Task to update status to failed when SSM install times out
-    const updateStatusSsmInstallTimeout = new tasks.CallAwsService(this, 'UpdateStatusSsmInstallTimeout', {
+    const updateStatusSsmInstallTimeout = guard.protect(new tasks.CallAwsService(this, 'UpdateStatusSsmInstallTimeout', {
       service: 'dynamodb',
       action: 'updateItem',
       parameters: {
         'TableName': props.workstationTable.tableName,
+        'ConditionExpression': WorkstationRecordGuard.CONDITION,
         'Key': {
           'instanceId': {
             'S.$': '$.instanceId'
@@ -620,7 +627,7 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
       },
       resultPath: '$.updateResult',
       iamResources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/${props.workstationTable.tableName}`]
-    });
+    }));
 
     // Failure states for SSM install
     const failSsmInstallCommand = new stepfunctions.Fail(this, 'FailSsmInstallCommand', {
@@ -672,11 +679,12 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
     });
 
     // Task to update status to failed when DCV readiness fails after cleanup
-    const updateStatusDCVFailed = new tasks.CallAwsService(this, 'UpdateStatusDCVFailed', {
+    const updateStatusDCVFailed = guard.protect(new tasks.CallAwsService(this, 'UpdateStatusDCVFailed', {
       service: 'dynamodb',
       action: 'updateItem',
       parameters: {
         'TableName': props.workstationTable.tableName,
+        'ConditionExpression': WorkstationRecordGuard.CONDITION,
         'Key': {
           'instanceId': {
             'S.$': '$.instanceId'
@@ -703,14 +711,15 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
       },
       resultPath: '$.updateResult',
       iamResources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/${props.workstationTable.tableName}`]
-    });
+    }));
 
     // Task to update status to failed when DCV readiness times out
-    const updateStatusDCVTimeout = new tasks.CallAwsService(this, 'UpdateStatusDCVTimeout', {
+    const updateStatusDCVTimeout = guard.protect(new tasks.CallAwsService(this, 'UpdateStatusDCVTimeout', {
       service: 'dynamodb',
       action: 'updateItem',
       parameters: {
         'TableName': props.workstationTable.tableName,
+        'ConditionExpression': WorkstationRecordGuard.CONDITION,
         'Key': {
           'instanceId': {
             'S.$': '$.instanceId'
@@ -737,7 +746,7 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
       },
       resultPath: '$.updateResult',
       iamResources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/${props.workstationTable.tableName}`]
-    });
+    }));
 
     // Lambda function to configure auto-login for standalone workstations
     const configureAutoLoginFunction = new lambda.Function(this, 'ConfigureAutoLoginFunction', {
@@ -958,11 +967,12 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
     });
 
     // Task to update status to setting-hostname
-    const updateStatusSettingHostname = new tasks.CallAwsService(this, 'UpdateStatusSettingHostname', {
+    const updateStatusSettingHostname = guard.protect(new tasks.CallAwsService(this, 'UpdateStatusSettingHostname', {
       service: 'dynamodb',
       action: 'updateItem',
       parameters: {
         'TableName': props.workstationTable.tableName,
+        'ConditionExpression': WorkstationRecordGuard.CONDITION,
         'Key': {
           'instanceId': {
             'S.$': '$.instanceId'
@@ -986,14 +996,15 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
       },
       resultPath: '$.updateResult',
       iamResources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/${props.workstationTable.tableName}`]
-    });
+    }));
 
     // Task to update status to installing-dcv
-    const updateStatusInstallingDcv = new tasks.CallAwsService(this, 'UpdateStatusInstallingDcv', {
+    const updateStatusInstallingDcv = guard.protect(new tasks.CallAwsService(this, 'UpdateStatusInstallingDcv', {
       service: 'dynamodb',
       action: 'updateItem',
       parameters: {
         'TableName': props.workstationTable.tableName,
+        'ConditionExpression': WorkstationRecordGuard.CONDITION,
         'Key': {
           'instanceId': {
             'S.$': '$.instanceId'
@@ -1017,14 +1028,15 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
       },
       resultPath: '$.updateResult',
       iamResources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/${props.workstationTable.tableName}`]
-    });
+    }));
 
     // Task to update status to configuring-dcv
-    const updateStatusConfiguringDcv = new tasks.CallAwsService(this, 'UpdateStatusConfiguringDcv', {
+    const updateStatusConfiguringDcv = guard.protect(new tasks.CallAwsService(this, 'UpdateStatusConfiguringDcv', {
       service: 'dynamodb',
       action: 'updateItem',
       parameters: {
         'TableName': props.workstationTable.tableName,
+        'ConditionExpression': WorkstationRecordGuard.CONDITION,
         'Key': {
           'instanceId': {
             'S.$': '$.instanceId'
@@ -1048,14 +1060,15 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
       },
       resultPath: '$.updateResult',
       iamResources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/${props.workstationTable.tableName}`]
-    });
+    }));
 
     // Task to update status to joining-domain
-    const updateStatusJoiningDomain = new tasks.CallAwsService(this, 'UpdateStatusJoiningDomain', {
+    const updateStatusJoiningDomain = guard.protect(new tasks.CallAwsService(this, 'UpdateStatusJoiningDomain', {
       service: 'dynamodb',
       action: 'updateItem',
       parameters: {
         'TableName': props.workstationTable.tableName,
+        'ConditionExpression': WorkstationRecordGuard.CONDITION,
         'Key': {
           'instanceId': {
             'S.$': '$.instanceId'
@@ -1079,14 +1092,15 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
       },
       resultPath: '$.updateResult',
       iamResources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/${props.workstationTable.tableName}`]
-    });
+    }));
 
     // Task to update status to joining-domain (no cleanup path)
-    const updateStatusJoiningDomainNoCleanup = new tasks.CallAwsService(this, 'UpdateStatusJoiningDomainNoCleanup', {
+    const updateStatusJoiningDomainNoCleanup = guard.protect(new tasks.CallAwsService(this, 'UpdateStatusJoiningDomainNoCleanup', {
       service: 'dynamodb',
       action: 'updateItem',
       parameters: {
         'TableName': props.workstationTable.tableName,
+        'ConditionExpression': WorkstationRecordGuard.CONDITION,
         'Key': {
           'instanceId': {
             'S.$': '$.instanceId'
@@ -1110,14 +1124,15 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
       },
       resultPath: '$.updateResult',
       iamResources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/${props.workstationTable.tableName}`]
-    });
+    }));
 
     // Task to update status to configuring-system
-    const updateStatusConfiguringSystem = new tasks.CallAwsService(this, 'UpdateStatusConfiguringSystem', {
+    const updateStatusConfiguringSystem = guard.protect(new tasks.CallAwsService(this, 'UpdateStatusConfiguringSystem', {
       service: 'dynamodb',
       action: 'updateItem',
       parameters: {
         'TableName': props.workstationTable.tableName,
+        'ConditionExpression': WorkstationRecordGuard.CONDITION,
         'Key': {
           'instanceId': {
             'S.$': '$.instanceId'
@@ -1141,14 +1156,15 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
       },
       resultPath: '$.updateResult',
       iamResources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/${props.workstationTable.tableName}`]
-    });
+    }));
 
     // Task to update status to configuring-system (no cleanup path)
-    const updateStatusConfiguringSystemNoCleanup = new tasks.CallAwsService(this, 'UpdateStatusConfiguringSystemNoCleanup', {
+    const updateStatusConfiguringSystemNoCleanup = guard.protect(new tasks.CallAwsService(this, 'UpdateStatusConfiguringSystemNoCleanup', {
       service: 'dynamodb',
       action: 'updateItem',
       parameters: {
         'TableName': props.workstationTable.tableName,
+        'ConditionExpression': WorkstationRecordGuard.CONDITION,
         'Key': {
           'instanceId': {
             'S.$': '$.instanceId'
@@ -1172,14 +1188,15 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
       },
       resultPath: '$.updateResult',
       iamResources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/${props.workstationTable.tableName}`]
-    });
+    }));
 
     // Task to update status to finalizing
-    const updateStatusFinalizing = new tasks.CallAwsService(this, 'UpdateStatusFinalizing', {
+    const updateStatusFinalizing = guard.protect(new tasks.CallAwsService(this, 'UpdateStatusFinalizing', {
       service: 'dynamodb',
       action: 'updateItem',
       parameters: {
         'TableName': props.workstationTable.tableName,
+        'ConditionExpression': WorkstationRecordGuard.CONDITION,
         'Key': {
           'instanceId': {
             'S.$': '$.instanceId'
@@ -1203,14 +1220,15 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
       },
       resultPath: '$.updateResult',
       iamResources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/${props.workstationTable.tableName}`]
-    });
+    }));
 
     // Task to update status to finalizing (no cleanup path)
-    const updateStatusFinalizingNoCleanup = new tasks.CallAwsService(this, 'UpdateStatusFinalizingNoCleanup', {
+    const updateStatusFinalizingNoCleanup = guard.protect(new tasks.CallAwsService(this, 'UpdateStatusFinalizingNoCleanup', {
       service: 'dynamodb',
       action: 'updateItem',
       parameters: {
         'TableName': props.workstationTable.tableName,
+        'ConditionExpression': WorkstationRecordGuard.CONDITION,
         'Key': {
           'instanceId': {
             'S.$': '$.instanceId'
@@ -1234,14 +1252,15 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
       },
       resultPath: '$.updateResult',
       iamResources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/${props.workstationTable.tableName}`]
-    });
+    }));
 
     // Task to update status to Complete
-    const updateStatusReady = new tasks.CallAwsService(this, 'UpdateStatusComplete', {
+    const updateStatusReady = guard.protect(new tasks.CallAwsService(this, 'UpdateStatusComplete', {
       service: 'dynamodb',
       action: 'updateItem',
       parameters: {
         'TableName': props.workstationTable.tableName,
+        'ConditionExpression': WorkstationRecordGuard.CONDITION,
         'Key': {
           'instanceId': {
             'S.$': '$.instanceId'
@@ -1265,14 +1284,15 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
       },
       resultPath: '$.updateResult',
       iamResources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/${props.workstationTable.tableName}`]
-    });
+    }));
 
     // Task to update status to Complete (no cleanup path)
-    const updateStatusReadyNoCleanup = new tasks.CallAwsService(this, 'UpdateStatusCompleteNoCleanup', {
+    const updateStatusReadyNoCleanup = guard.protect(new tasks.CallAwsService(this, 'UpdateStatusCompleteNoCleanup', {
       service: 'dynamodb',
       action: 'updateItem',
       parameters: {
         'TableName': props.workstationTable.tableName,
+        'ConditionExpression': WorkstationRecordGuard.CONDITION,
         'Key': {
           'instanceId': {
             'S.$': '$.instanceId'
@@ -1296,7 +1316,7 @@ export class WindowsWorkstationCreationStack extends cdk.Stack {
       },
       resultPath: '$.updateResult',
       iamResources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/${props.workstationTable.tableName}`]
-    });
+    }));
 
     // Wait state for domain join (longer wait)
     const waitForDomainJoin = new stepfunctions.Wait(this, 'WaitForDomainJoin', {

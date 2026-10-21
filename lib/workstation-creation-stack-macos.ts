@@ -12,6 +12,7 @@ import * as kms from 'aws-cdk-lib/aws-kms';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as path from 'path';
 import { Construct } from 'constructs';
+import { WorkstationRecordGuard } from './workstation-record-guard';
 
 interface MacOSWorkstationCreationStackProps extends cdk.StackProps {
   productName: string;
@@ -545,12 +546,17 @@ export class MacOSWorkstationCreationStack extends cdk.Stack {
       time: stepfunctions.WaitTime.duration(cdk.Duration.seconds(30)),
     });
 
+    // Every write below requires the workstation record to exist, and a build whose record
+    // was deleted under it ends in guard.deleted. See lib/workstation-record-guard.ts.
+    const guard = new WorkstationRecordGuard(this);
+
     // DynamoDB status updates
-    const updateStatusSettingHostname = new tasks.CallAwsService(this, 'UpdateStatusSettingHostname', {
+    const updateStatusSettingHostname = guard.protect(new tasks.CallAwsService(this, 'UpdateStatusSettingHostname', {
       service: 'dynamodb',
       action: 'updateItem',
       parameters: {
         'TableName': props.workstationTable.tableName,
+        'ConditionExpression': WorkstationRecordGuard.CONDITION,
         'Key': { 'instanceId': { 'S.$': '$.instanceId' } },
         'UpdateExpression': 'SET #status = :status, dcvStatus = :dcvStatus',
         'ExpressionAttributeNames': { '#status': 'status' },
@@ -561,13 +567,14 @@ export class MacOSWorkstationCreationStack extends cdk.Stack {
       },
       resultPath: stepfunctions.JsonPath.DISCARD,
       iamResources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/${props.workstationTable.tableName}`]
-    });
+    }));
 
-    const updateStatusPhase1 = new tasks.CallAwsService(this, 'UpdateStatusPhase1', {
+    const updateStatusPhase1 = guard.protect(new tasks.CallAwsService(this, 'UpdateStatusPhase1', {
       service: 'dynamodb',
       action: 'updateItem',
       parameters: {
         'TableName': props.workstationTable.tableName,
+        'ConditionExpression': WorkstationRecordGuard.CONDITION,
         'Key': { 'instanceId': { 'S.$': '$.instanceId' } },
         'UpdateExpression': 'SET #status = :status, dcvStatus = :dcvStatus',
         'ExpressionAttributeNames': { '#status': 'status' },
@@ -578,13 +585,14 @@ export class MacOSWorkstationCreationStack extends cdk.Stack {
       },
       resultPath: stepfunctions.JsonPath.DISCARD,
       iamResources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/${props.workstationTable.tableName}`]
-    });
+    }));
 
-    const updateStatusPhase2 = new tasks.CallAwsService(this, 'UpdateStatusPhase2', {
+    const updateStatusPhase2 = guard.protect(new tasks.CallAwsService(this, 'UpdateStatusPhase2', {
       service: 'dynamodb',
       action: 'updateItem',
       parameters: {
         'TableName': props.workstationTable.tableName,
+        'ConditionExpression': WorkstationRecordGuard.CONDITION,
         'Key': { 'instanceId': { 'S.$': '$.instanceId' } },
         'UpdateExpression': 'SET #status = :status, dcvStatus = :dcvStatus',
         'ExpressionAttributeNames': { '#status': 'status' },
@@ -595,13 +603,14 @@ export class MacOSWorkstationCreationStack extends cdk.Stack {
       },
       resultPath: stepfunctions.JsonPath.DISCARD,
       iamResources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/${props.workstationTable.tableName}`]
-    });
+    }));
 
-    const updateStatusRebooting = new tasks.CallAwsService(this, 'UpdateStatusRebooting', {
+    const updateStatusRebooting = guard.protect(new tasks.CallAwsService(this, 'UpdateStatusRebooting', {
       service: 'dynamodb',
       action: 'updateItem',
       parameters: {
         'TableName': props.workstationTable.tableName,
+        'ConditionExpression': WorkstationRecordGuard.CONDITION,
         'Key': { 'instanceId': { 'S.$': '$.instanceId' } },
         'UpdateExpression': 'SET #status = :status, dcvStatus = :dcvStatus',
         'ExpressionAttributeNames': { '#status': 'status' },
@@ -612,13 +621,14 @@ export class MacOSWorkstationCreationStack extends cdk.Stack {
       },
       resultPath: stepfunctions.JsonPath.DISCARD,
       iamResources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/${props.workstationTable.tableName}`]
-    });
+    }));
 
-    const updateStatusComplete = new tasks.CallAwsService(this, 'UpdateStatusComplete', {
+    const updateStatusComplete = guard.protect(new tasks.CallAwsService(this, 'UpdateStatusComplete', {
       service: 'dynamodb',
       action: 'updateItem',
       parameters: {
         'TableName': props.workstationTable.tableName,
+        'ConditionExpression': WorkstationRecordGuard.CONDITION,
         'Key': { 'instanceId': { 'S.$': '$.instanceId' } },
         'UpdateExpression': 'SET #status = :status, dcvStatus = :dcvStatus',
         'ExpressionAttributeNames': { '#status': 'status' },
@@ -629,7 +639,7 @@ export class MacOSWorkstationCreationStack extends cdk.Stack {
       },
       resultPath: stepfunctions.JsonPath.DISCARD,
       iamResources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/${props.workstationTable.tableName}`]
-    });
+    }));
 
     // Success/Failure states
     const successState = new stepfunctions.Succeed(this, 'MacOSWorkstationCreated');
@@ -639,11 +649,12 @@ export class MacOSWorkstationCreationStack extends cdk.Stack {
     });
 
     // Helper to create unique failure update states
-    const createFailureUpdate = (id: string) => new tasks.CallAwsService(this, id, {
+    const createFailureUpdate = (id: string) => guard.protect(new tasks.CallAwsService(this, id, {
       service: 'dynamodb',
       action: 'updateItem',
       parameters: {
         'TableName': props.workstationTable.tableName,
+        'ConditionExpression': WorkstationRecordGuard.CONDITION,
         'Key': { 'instanceId': { 'S.$': '$.instanceId' } },
         'UpdateExpression': 'SET #status = :status, dcvStatus = :dcvStatus',
         'ExpressionAttributeNames': { '#status': 'status' },
@@ -654,7 +665,7 @@ export class MacOSWorkstationCreationStack extends cdk.Stack {
       },
       resultPath: stepfunctions.JsonPath.DISCARD,
       iamResources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/${props.workstationTable.tableName}`]
-    }).next(failureState);
+    })).next(failureState);
 
 
     // ============================================
