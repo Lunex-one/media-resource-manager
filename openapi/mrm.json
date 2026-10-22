@@ -2,7 +2,7 @@
   "openapi": "3.0.1",
   "info": {
     "title": "Media Resource Manager API",
-    "version": "1.0.3",
+    "version": "1.3.2-lunex.1",
     "description": "Self-service management API for MRM cloud workstations: EC2 workstation lifecycle, users and groups, AMIs and Image Builder pipelines, the software library, FSx/S3 storage, DataSync, regional hubs and Amazon DCV sessions.\n\nAll routes except `POST /auth/ldap` and `GET /auth/validate` require a bearer token. See `docs/API.md` for how to obtain one.\n\nGenerated from the deployed API by `openapi/build.py`; schemas are maintained by hand in `openapi/overlay.json`.",
     "license": {
       "name": "Apache-2.0",
