@@ -326,7 +326,10 @@ export const signInWithLDAP = async (username: string, password: string) => {
   });
   
   if (!response.ok) {
-    throw new Error('Authentication failed');
+    // The server names a reason only when the directory reported one after verifying the
+    // password (expired, must change, disabled); anything else stays generic.
+    const failure = await response.json().catch(() => null);
+    throw new Error(failure && failure.code ? failure.error : 'Authentication failed');
   }
   
   const data = await response.json();
