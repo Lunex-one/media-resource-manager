@@ -343,8 +343,8 @@ function buildRealm(props: IdentityBrokerStackProps) {
     registrationAllowed: false,
     resetPasswordAllowed: false,
     sslRequired: 'external',
-    // Five failures lock the user in Keycloak for 30 minutes, so repeated attempts cannot add
-    // up to the directory's own lockout threshold.
+    // Five failures lock the user in Keycloak for 30 minutes. The directory has account lockout
+    // disabled, so this is the only brake on password guessing through the broker.
     bruteForceProtected: true,
     permanentLockout: false,
     failureFactor: 5,
