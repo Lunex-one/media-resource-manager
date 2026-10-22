@@ -131,24 +131,16 @@ async function authenticateWithLDAP(username, password) {
             
             const userDN = username.includes(`@`) ? username : `${username}@${domainName}`;
             
-            client.bind(userDN, password, (err, res) => {
+            client.bind(userDN, password, (err) => {
               if (err) {
-                const adCode = adBindCode(err) || adBindCode({ message: res && res.errorMessage });
+                // ldapjs 3.0.7 does not expose the directory's diagnostic on a rejected bind: err.message and
+                // err.lde_message are the generic "Invalid Credentials" and no result object is passed. So
+                // adCode is null today and every failure stays generic. A client that keeps the server's
+                // message (ldapts passes result.errorMessage into the error) makes this live.
+                const adCode = adBindCode(err);
                 const detail = err.lde_message && err.lde_message !== err.message ? ` [${err.lde_message}]` : '';
                 console.log(`LDAP bind failed: ${err.message}${detail}${adCode ? ` (AD data ${adCode})` : ''}`);
                 client.unbind();
-                if (!adCode) {
-                  // The sub-code was not found: log the error's shape so the right field can be read.
-                  console.log('LDAP bind error detail:', JSON.stringify({
-                    name: err.name,
-                    code: err.code,
-                    lde_message: err.lde_message,
-                    lde_dn: err.lde_dn,
-                    ownProperties: Object.getOwnPropertyNames(err).filter((k) => k !== 'stack'),
-                    resultKeys: res ? Object.keys(res) : null,
-                    errorMessage: res && res.errorMessage,
-                  }));
-                }
                 resolve({ success: false, reason: adBindReason(adCode) });
                 return;
               }

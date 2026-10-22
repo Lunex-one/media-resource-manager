@@ -10,6 +10,9 @@
  * Only reasons AD reports after it has verified the password are exposed to the caller. A wrong
  * password (52e), an unknown user (525) and a lockout (775) stay indistinguishable from each other,
  * so a failed sign-in still reveals nothing about whether an account exists.
+ *
+ * Inactive with ldapjs 3.0.7, which drops the diagnostic (see index.js); it takes effect once the
+ * LDAP client keeps the server's message on the error.
  */
 const REASON_BY_CODE = {
   '532': 'PASSWORD_EXPIRED',
