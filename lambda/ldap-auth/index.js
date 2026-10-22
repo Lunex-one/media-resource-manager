@@ -6,6 +6,7 @@ const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
 const crypto = require('crypto');
+const { adBindCode, adBindReason, REASON_MESSAGES } = require('./bind-errors');
 
 const lambdaClient = new LambdaClient();
 const dynamoDoc = DynamoDBDocumentClient.from(new DynamoDBClient({}));
@@ -132,9 +133,11 @@ async function authenticateWithLDAP(username, password) {
             
             client.bind(userDN, password, (err) => {
               if (err) {
-                console.log('LDAP bind failed:', err.message);
+                const adCode = adBindCode(err);
+                const detail = err.lde_message && err.lde_message !== err.message ? ` [${err.lde_message}]` : '';
+                console.log(`LDAP bind failed: ${err.message}${detail}${adCode ? ` (AD data ${adCode})` : ''}`);
                 client.unbind();
-                resolve({ success: false });
+                resolve({ success: false, reason: adBindReason(adCode) });
                 return;
               }
               
@@ -388,7 +391,11 @@ async function authenticateWithLDAP(username, password) {
                   'Access-Control-Allow-Credentials': 'true',
                   'Access-Control-Allow-Headers': 'Content-Type'
                 },
-                body: JSON.stringify({ error: 'Invalid credentials' })
+                body: JSON.stringify(
+                    ldapResult.reason
+                      ? { error: REASON_MESSAGES[ldapResult.reason], code: ldapResult.reason }
+                      : { error: 'Invalid credentials' }
+                  )
               };
             }
           } catch (error) {
