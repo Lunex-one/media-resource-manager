@@ -1,0 +1,10 @@
+{
+  "name": "ldap-auth",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Direct LDAP sign-in for the console",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "ldapts": "^9.2.0"
+  }
+}
