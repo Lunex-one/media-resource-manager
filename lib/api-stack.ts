@@ -2018,8 +2018,8 @@ export class ApiStack extends cdk.Stack {
             customResponse: {
               responseCode: 429,
               customResponseBodyKey: 'RateLimited',
-              // A WAF response bypasses API Gateway, so it needs its own CORS header.
-              responseHeaders: [{ name: 'Access-Control-Allow-Origin', value: '*' }],
+              // No CORS header here: the API's Default4XX gateway response already adds one, and a
+              // second Access-Control-Allow-Origin makes browsers reject the response.
             },
           },
         },
