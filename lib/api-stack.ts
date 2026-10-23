@@ -16,6 +16,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import * as path from 'path';
 
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
@@ -1979,6 +1980,84 @@ export class ApiStack extends cdk.Stack {
     
     // Login endpoint
     directAuthResource.addMethod('POST', directAuthIntegration);
+
+    // Rate-limit sign-in attempts per source IP. Account lockout is disabled in this directory, so
+    // nothing else brakes password guessing against POST /auth/ldap. Calls from workstation-manager
+    // and change-password invoke the function directly and never pass through the API.
+    const loginUriEndsWith = (text: string): wafv2.CfnWebACL.StatementProperty => ({
+      byteMatchStatement: {
+        searchString: text,
+        fieldToMatch: { uriPath: {} },
+        textTransformations: [{ priority: 0, type: 'NONE' }],
+        positionalConstraint: 'ENDS_WITH',
+      },
+    });
+    const loginRateLimitAcl = new wafv2.CfnWebACL(this, 'LoginRateLimitWebAcl', {
+      scope: 'REGIONAL',
+      defaultAction: { allow: {} },
+      visibilityConfig: {
+        cloudWatchMetricsEnabled: true,
+        sampledRequestsEnabled: true,
+        metricName: `${props.acronym}LoginRateLimit`,
+      },
+      // The body is JSON in the shape the sign-in screen already displays (error + code).
+      customResponseBodies: {
+        RateLimited: {
+          contentType: 'APPLICATION_JSON',
+          content: JSON.stringify({
+            error: 'Too many sign-in attempts. Wait a few minutes and try again.',
+            code: 'RATE_LIMITED',
+          }),
+        },
+      },
+      rules: [{
+        name: 'LdapLoginRateLimit',
+        priority: 1,
+        action: {
+          block: {
+            customResponse: {
+              responseCode: 429,
+              customResponseBodyKey: 'RateLimited',
+              // A WAF response bypasses API Gateway, so it needs its own CORS header.
+              responseHeaders: [{ name: 'Access-Control-Allow-Origin', value: '*' }],
+            },
+          },
+        },
+        statement: {
+          rateBasedStatement: {
+            limit: 50,
+            evaluationWindowSec: 300,
+            aggregateKeyType: 'IP',
+            // Only the POST: the browser's preflight OPTIONS would otherwise halve the allowance.
+            scopeDownStatement: {
+              andStatement: {
+                statements: [
+                  loginUriEndsWith('/auth/ldap'),
+                  {
+                    byteMatchStatement: {
+                      searchString: 'POST',
+                      fieldToMatch: { method: {} },
+                      textTransformations: [{ priority: 0, type: 'NONE' }],
+                      positionalConstraint: 'EXACTLY',
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+        visibilityConfig: {
+          cloudWatchMetricsEnabled: true,
+          sampledRequestsEnabled: true,
+          metricName: `${props.acronym}LdapLoginRateLimit`,
+        },
+      }],
+    });
+    const loginRateLimitAssociation = new wafv2.CfnWebACLAssociation(this, 'LoginRateLimitAssociation', {
+      resourceArn: `arn:aws:apigateway:${this.region}::/restapis/${this.api.restApiId}/stages/${this.api.deploymentStage.stageName}`,
+      webAclArn: loginRateLimitAcl.attrArn,
+    });
+    loginRateLimitAssociation.node.addDependency(this.api.deploymentStage);
     
     // JWT validation endpoint
     const validateResource = authResource.addResource('validate');
