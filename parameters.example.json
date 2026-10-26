@@ -90,6 +90,11 @@
     "Description": "Set to 'false' to disable AI/Bedrock features (script generation, AgentCore stack, Observability stack). Useful for accounts with SCPs that restrict Bedrock access."
   },
   {
+    "ParameterKey": "ReducedLambdaConcurrency",
+    "ParameterValue": "false",
+    "Description": "Set to 'true' to halve Lambda reserved concurrency (never below 5), bringing the total from about 1,450 to about 870 so MRM deploys into a region at the default 1,000 concurrency quota. Set back to 'false' after the quota is raised."
+  },
+  {
     "ParameterKey": "MacBuildAvailabilityZone",
     "ParameterValue": "",
     "Description": "Optional: AZ for macOS Image Builder builds (e.g., us-east-1c). Must match an AZ with mac dedicated hosts allocated. Leave empty to use the first private subnet."

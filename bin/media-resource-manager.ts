@@ -24,6 +24,7 @@ import { DataSyncStack } from '../lib/datasync-stack';
 import { ObservabilityStack } from '../lib/observability-stack';
 import { AgentCoreStack } from '../lib/agentcore-stack';
 import { IdentityBrokerStack } from '../lib/identity-broker-stack';
+import { ReducedLambdaConcurrency } from '../lib/reduced-lambda-concurrency';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
@@ -206,6 +207,12 @@ const env = {
   account: process.env.CDK_DEFAULT_ACCOUNT,
   region: process.env.CDK_DEFAULT_REGION || 'us-east-1',
 };
+
+// Optional lower Lambda reservations, for a region without a raised concurrency quota. Off unless
+// reducedLambdaConcurrency=true. See lib/reduced-lambda-concurrency.ts.
+if (getContextOrParameter('reducedLambdaConcurrency') === 'true') {
+  Aspects.of(app).add(new ReducedLambdaConcurrency());
+}
 
 // Optional OIDC broker (Keycloak) in front of the directory. Off unless identityBroker=true.
 // A misconfigured deployment fails at synth with a clear message.

@@ -60,6 +60,7 @@ Metadata:
           - HostnamePrefix
           - HostnameDigits
           - EnableBedrockFeatures
+          - ReducedLambdaConcurrency
       - Label:
           default: "DCV / Custom Domain (Optional)"
         Parameters:
@@ -137,6 +138,8 @@ Metadata:
         default: "Hostname Suffix Digits"
       EnableBedrockFeatures:
         default: "Enable AI / Bedrock Features"
+      ReducedLambdaConcurrency:
+        default: "Reduced Lambda Concurrency"
       DcvCertificateArn:
         default: "DCV TLS Certificate ARN"
       DcvDomainName:
@@ -363,6 +366,15 @@ Parameters:
       Set to 'false' to skip deploying AI/Bedrock stacks (AgentCore, Observability)
       and hide AI script generation in the frontend. Useful for accounts with SCPs
       that restrict Bedrock access.
+
+  ReducedLambdaConcurrency:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >
+      Set to 'true' to halve Lambda reserved concurrency (never below 5), from about
+      1,450 to about 870, so MRM deploys into a region at the default 1,000
+      concurrency quota. Set back to 'false' after the quota is raised.
 
   HostnameDigits:
     Type: String
@@ -762,6 +774,8 @@ Resources:
             Value: !Ref ProductName
           - Name: MRM_ENABLE_BEDROCK
             Value: !Ref EnableBedrockFeatures
+          - Name: MRM_REDUCED_LAMBDA_CONCURRENCY
+            Value: !Ref ReducedLambdaConcurrency
           - Name: MRM_MAC_BUILD_AZ
             Value: !Ref MacBuildAvailabilityZone
           - Name: MRM_WAF_ALLOWED_IPS
@@ -929,6 +943,7 @@ Resources:
                         FrontendUrl: process.env.MRM_FRONTEND_URL || '',
                         AdminEmails: process.env.MRM_ADMIN_EMAILS || '',
                         EnableBedrockFeatures: process.env.MRM_ENABLE_BEDROCK || 'true',
+                        ReducedLambdaConcurrency: process.env.MRM_REDUCED_LAMBDA_CONCURRENCY || 'false',
                         MacBuildAvailabilityZone: process.env.MRM_MAC_BUILD_AZ || '',
                         WafAllowedIps: process.env.MRM_WAF_ALLOWED_IPS || '',
                         FrontendCertificateArn: process.env.MRM_FRONTEND_CERTIFICATE_ARN || '',
@@ -1010,6 +1025,7 @@ Resources:
                         MRM_FRONTEND_URL: 'FrontendUrl',
                         MRM_ADMIN_EMAILS: 'AdminEmails',
                         MRM_ENABLE_BEDROCK: 'EnableBedrockFeatures',
+                        MRM_REDUCED_LAMBDA_CONCURRENCY: 'ReducedLambdaConcurrency',
                         MRM_MAC_BUILD_AZ: 'MacBuildAvailabilityZone',
                         MRM_WAF_ALLOWED_IPS: 'WafAllowedIps',
                         MRM_FRONTEND_CERTIFICATE_ARN: 'FrontendCertificateArn',

@@ -326,6 +326,7 @@ The stack name you choose (e.g., `MRM-DeployPipeline`) is used to auto-generate 
 | `AdminEmails` | *(empty)* | Comma-separated emails to create as Cognito admin users on first deploy (e.g., `admin@company.com`). Each receives a welcome email with temp password. |
 | `IdentityCenterSyncGroups` | *(empty)* | Identity Center group(s) to sync users from |
 | `EnableBedrockFeatures` | `true` | Set to `false` to skip AI/Bedrock stacks and hide AI features in the frontend. Useful for accounts with SCPs that restrict Bedrock access. |
+| `ReducedLambdaConcurrency` | `false` | Set to `true` to halve Lambda reserved concurrency (never below 5), from about 1,450 to about 870, so MRM deploys into a region at the default 1,000 concurrency quota. Set back to `false` after the quota is raised. |
 | `MacBuildAvailabilityZone` | *(empty)* | AZ for macOS Image Builder builds (e.g., `us-east-1c`). Must match an AZ where mac dedicated hosts can be allocated. Leave empty to use the first private subnet's AZ. |
 | `WafAllowedIps` | *(empty)* | Comma-separated CIDR ranges to whitelist for CloudFront access (e.g., `203.0.113.0/24,198.51.100.0/24`). When set, a WAF WebACL blocks all traffic except from these IPs. Leave empty to allow all traffic (no WAF). |
 | `FrontendCertificateArn` | *(empty)* | ARN of an ACM certificate in `us-east-1` for the custom frontend domain. Required when `FrontendUrl` is set to a custom domain. See [Custom Domain Setup](#3-configure-custom-domain-optional). |
@@ -547,6 +548,7 @@ cp parameters.example.json parameters.json
 | `FrontendUrl` | *(empty)* | Custom URL for web console |
 | `AdminEmails` | *(empty)* | Comma-separated emails to create as Cognito admin users on first deploy. Each receives a welcome email with temp password. |
 | `EnableBedrockFeatures` | `true` | Set to `false` to disable AI/Bedrock features. Useful for accounts with SCPs that restrict Bedrock access. |
+| `ReducedLambdaConcurrency` | `false` | Set to `true` to halve Lambda reserved concurrency (never below 5), so MRM deploys into a region at the default concurrency quota. Set back to `false` after the quota is raised. |
 | `MacBuildAvailabilityZone` | *(empty)* | AZ for macOS Image Builder builds (e.g., `us-east-1c`). Must match an AZ where mac dedicated hosts can be allocated. Leave empty to use the first private subnet's AZ. |
 | `WafAllowedIps` | *(empty)* | Comma-separated CIDR ranges to whitelist for CloudFront access. When set, creates a WAF WebACL that blocks all traffic except from these IPs. Leave empty for no restriction. |
 | `FrontendCertificateArn` | *(empty)* | ACM certificate ARN in `us-east-1` for the custom frontend domain. Required when `FrontendUrl` is set. |
