@@ -181,3 +181,6 @@ software-library/utilities/slack-*
 # `python3 openapi/build.py`; only the merged openapi/mrm.json is committed.
 openapi/generated/
 
+
+# The connect portal page script (the *.js rule above would otherwise hide it)
+!connect-portal/web/*.js
