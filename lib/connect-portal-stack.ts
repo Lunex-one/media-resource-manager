@@ -87,6 +87,8 @@ export class ConnectPortalStack extends cdk.Stack {
       memorySize: 256,
       reservedConcurrentExecutions: 20,
       logGroup: new logs.LogGroup(this, 'PortalLogs', {
+        // The standard name, so the log is where an operator looks for it.
+        logGroupName: `/aws/lambda/${prefix}-connect-portal`,
         retention: logs.RetentionDays.ONE_MONTH,
         removalPolicy: cdk.RemovalPolicy.DESTROY,
       }),

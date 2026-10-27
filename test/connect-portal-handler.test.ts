@@ -42,9 +42,9 @@ function setup(responses: Record<string, any>) {
 
 const lambdaReply = (statusCode: number, body: any) => ({ statusCode, body: JSON.stringify(body) });
 
-function signedIn(): string[] {
+function signedIn(claims: Record<string, string> = {}): string[] {
   const token: string = createSessionToken(
-    { username: 'richard', email: 'r@x.io', firstName: 'Richard', lastName: 'Duke' }, SECRET, 3600, NOW);
+    { username: 'richard', email: 'r@x.io', firstName: 'Richard', lastName: 'Duke', ...claims }, SECRET, 3600, NOW);
   return [`${COOKIE_NAME}=${token}`];
 }
 
@@ -234,7 +234,9 @@ describe('connecting to a workstation', () => {
     expect(body.connectionUrl).toBe(url);
     expect(body.quicConnectionUrl).toContain(':8444');
     expect(body.connectionToken).toBeUndefined();
-    expect(JSON.parse(calls[0].event.body)).toEqual({ action: 'create-session', serverId: INSTANCE, sessionType: 'console' });
+    expect(JSON.parse(calls[0].event.body)).toEqual({
+      action: 'create-session', serverId: INSTANCE, sessionName: 'Richard Duke', sessionType: 'console',
+    });
     expect(calls[0].event.requestContext.authorizer.isAdmin).toBe('false');
   });
 
@@ -269,4 +271,33 @@ describe('connecting to a workstation', () => {
 test('unknown routes are 404 once signed in', async () => {
   const { handler } = setup({});
   expect((await handler(request('GET', '/api/nothing', { cookies: signedIn() }))).statusCode).toBe(404);
+});
+
+describe('the DCV session name', () => {
+  const reply = lambdaReply(200, { connectionUrl: 'https://gw.example.com:8443/?authToken=T#s' });
+
+  async function nameSentFor(claims: Record<string, string>): Promise<string> {
+    const { handler, calls } = setup({ dcv: reply });
+    await handler(request('POST', '/api/workstations/connect',
+      { body: { instanceId: INSTANCE }, cookies: signedIn(claims) }));
+    return JSON.parse(calls[0].event.body).sessionName;
+  }
+
+  test('is the person\'s full name, as the console sends it', async () => {
+    expect(await nameSentFor({})).toBe('Richard Duke');
+  });
+
+  test('falls back to the part of the email before the @ when there is no name', async () => {
+    expect(await nameSentFor({ firstName: '', lastName: '' })).toBe('r');
+  });
+
+  test('falls back to the username when there is neither name nor email', async () => {
+    expect(await nameSentFor({ firstName: '', lastName: '', email: '' })).toBe('richard');
+  });
+
+  test('is always present, because create-session refuses a request without one', async () => {
+    for (const claims of [{}, { firstName: '' }, { lastName: '' }, { firstName: '', lastName: '', email: '' }]) {
+      expect((await nameSentFor(claims)).length).toBeGreaterThan(0);
+    }
+  });
 });
