@@ -77,6 +77,16 @@ function isTerminated(w) {
   return String(w.instanceStatus).toLowerCase() === 'terminated' || String(w.status).toLowerCase() === 'terminated';
 }
 
+/**
+ * The display name DCV shows for a session. create-session requires one. The console sends the
+ * person's name, falling back to the part of their email before the @, so the portal does the same;
+ * the username is a last resort.
+ */
+function sessionNameFor(user) {
+  const full = [user.firstName, user.lastName].filter(Boolean).join(' ').trim();
+  return full || String(user.email || '').split('@')[0] || user.username;
+}
+
 function isHttpsUrl(value) {
   try {
     return new URL(value).protocol === 'https:';
@@ -193,7 +203,12 @@ function createHandler(deps) {
       {
         method: 'POST',
         path: '/dcv',
-        body: { action: 'create-session', serverId: body.instanceId, sessionType: 'console' },
+        body: {
+          action: 'create-session',
+          serverId: body.instanceId,
+          sessionName: sessionNameFor(user),
+          sessionType: 'console',
+        },
       },
       user
     );
