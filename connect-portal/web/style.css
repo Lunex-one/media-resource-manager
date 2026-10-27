@@ -1,0 +1,36 @@
+:root {
+  --bg: #f4f5f7; --card: #ffffff; --text: #1b1f24; --muted: #5b6672; --line: #d8dde3;
+  --accent: #1f6feb; --accent-text: #ffffff; --ok: #1a7f37; --idle: #6e7781; --busy: #9a6700; --error: #cf222e;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1318; --card: #181d24; --text: #e6e9ed; --muted: #9aa5b1; --line: #2b323b;
+    --accent: #4c8dff; --accent-text: #0b0f14; --ok: #3fb950; --idle: #8b949e; --busy: #d29922; --error: #ff7b72;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 640px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 1.4rem; margin: 0 0 16px; }
+.muted { color: var(--muted); }
+.error { color: var(--error); min-height: 1.5em; margin: 8px 0 0; }
+.top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+form { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 20px; }
+label { display: block; margin: 12px 0 4px; font-weight: 600; }
+input[type=text], input[type=password], input[readonly] {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); color: var(--text); font: inherit;
+}
+button { font: inherit; padding: 10px 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--text); cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+button:disabled { opacity: .55; cursor: default; }
+form button { margin-top: 16px; width: 100%; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin: 12px 0; }
+.card h2 { margin: 0; font-size: 1.1rem; }
+.row { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.badge { font-size: .8rem; font-weight: 600; padding: 2px 10px; border-radius: 999px; border: 1px solid currentColor; }
+.badge.ok { color: var(--ok); } .badge.idle { color: var(--idle); } .badge.busy { color: var(--busy); }
+.actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.link { margin-top: 12px; display: flex; gap: 8px; }
+.link input { flex: 1; min-width: 0; font-size: .85rem; }
+.progress { margin-top: 12px; color: var(--muted); }
