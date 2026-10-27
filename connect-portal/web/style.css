@@ -34,3 +34,7 @@ form button { margin-top: 16px; width: 100%; }
 .link { margin-top: 12px; display: flex; gap: 8px; }
 .link input { flex: 1; min-width: 0; font-size: .85rem; }
 .progress { margin-top: 12px; color: var(--muted); }
+.badge.failed { color: var(--error); }
+.badge.ready { color: var(--ok); }
+.badge.stopped { color: var(--idle); }
+.progress a { color: var(--accent); }
