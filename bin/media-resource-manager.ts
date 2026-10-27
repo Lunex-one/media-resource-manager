@@ -24,6 +24,7 @@ import { DataSyncStack } from '../lib/datasync-stack';
 import { ObservabilityStack } from '../lib/observability-stack';
 import { AgentCoreStack } from '../lib/agentcore-stack';
 import { IdentityBrokerStack } from '../lib/identity-broker-stack';
+import { ConnectPortalStack } from '../lib/connect-portal-stack';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
@@ -602,6 +603,29 @@ const eventBridgeStack = new EventBridgeStack(app, `${naming.acronym}-Events`, {
 eventBridgeStack.addDependency(apiStack);
 eventBridgeStack.addDependency(frontendStack);
 eventBridgeStack.addDependency(workstationStartStack);
+
+// Optional connect portal: one place for users to reach their own workstations. Off unless
+// connectPortal=true. A hostname needs its certificate (an ACM certificate in us-east-1) and the
+// other way round; with neither, the portal is served on its CloudFront address.
+if (getContextOrParameter('connectPortal') === 'true') {
+  const connectPortalHostname = getContextOrParameter('connectPortalHostname');
+  const connectPortalCertificateArn = getContextOrParameter('connectPortalCertificateArn');
+  if (!!connectPortalHostname !== !!connectPortalCertificateArn) {
+    throw new Error(
+      'connectPortal=true needs connectPortalHostname and connectPortalCertificateArn together, or neither ' +
+        '(pipeline parameters ConnectPortalHostname and ConnectPortalCertificateArn).'
+    );
+  }
+  const connectPortalStack = new ConnectPortalStack(app, `${naming.acronym}-Connect-Portal`, {
+    env,
+    pascalCaseName: naming.pascalCase,
+    acronym: naming.acronym,
+    hostname: connectPortalHostname,
+    certificateArn: connectPortalCertificateArn,
+  });
+  // The portal invokes the Lambdas that MRM-Api creates, so they must exist first.
+  connectPortalStack.addDependency(apiStack);
+}
 
 
 
