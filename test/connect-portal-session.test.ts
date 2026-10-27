@@ -9,6 +9,10 @@
  * a non-administrator, whoever signed in.
  */
 
+// A module, so its top-level names stay out of the global scope: test files without an
+// import or export share one scope across the project and would collide.
+export {};
+
 const {
   COOKIE_NAME,
   createSessionToken,

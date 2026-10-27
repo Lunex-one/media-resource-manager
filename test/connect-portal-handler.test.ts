@@ -10,6 +10,10 @@
  * sign-in says the same thing whether the password was wrong or the account does not exist.
  */
 
+// A module, so its top-level names stay out of the global scope: test files without an
+// import or export share one scope across the project and would collide.
+export {};
+
 const { createHandler } = require('../lambda/connect-portal/handler.js');
 const { COOKIE_NAME, createSessionToken } = require('../lambda/connect-portal/session.js');
 
