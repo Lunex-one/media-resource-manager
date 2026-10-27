@@ -55,6 +55,12 @@ Metadata:
           - IdentityBrokerMailDomain
           - IdentityBrokerRedirectUri
       - Label:
+          default: "Connect Portal (optional)"
+        Parameters:
+          - ConnectPortal
+          - ConnectPortalHostname
+          - ConnectPortalCertificateArn
+      - Label:
           default: "Workstation Settings"
         Parameters:
           - HostnamePrefix
@@ -121,6 +127,12 @@ Metadata:
         default: "Identity Broker Mail Domain"
       IdentityBrokerRedirectUri:
         default: "Identity Broker Client Redirect URI"
+      ConnectPortal:
+        default: "Deploy Connect Portal"
+      ConnectPortalHostname:
+        default: "Connect Portal Hostname (optional)"
+      ConnectPortalCertificateArn:
+        default: "Connect Portal ACM Certificate ARN (us-east-1)"
       UseCognitoAuth:
         default: "Use Cognito / SAML Authentication"
       IdentityCenterSyncGroups:
@@ -340,6 +352,32 @@ Parameters:
       Redirect URI of the relying party that signs users in through the broker
       (for example https://auth.example.com/auth/connections/callback).
       Required when IdentityBroker=true.
+
+  ConnectPortal:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >
+      Deploy the optional MRM-Connect-Portal stack: a page where users sign in and reach their
+      own workstations. Without ConnectPortalHostname it is served on its CloudFront address.
+      Leave 'false' for a standard deployment.
+
+  ConnectPortalHostname:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$'
+    ConstraintDescription: Must be empty or a lowercase DNS hostname (for example connect.example.com).
+    Description: >
+      Optional public hostname for the connect portal. Needs ConnectPortalCertificateArn.
+
+  ConnectPortalCertificateArn:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^arn:aws:acm:us-east-1:[0-9]{12}:certificate/[a-zA-Z0-9-]+$'
+    ConstraintDescription: Must be empty or an ACM certificate ARN in us-east-1 (a CloudFront requirement).
+    Description: >
+      ARN of the ACM certificate for ConnectPortalHostname. It must be in us-east-1 because
+      CloudFront only accepts certificates from there.
 
   HostnamePrefix:
     Type: String
@@ -738,6 +776,12 @@ Resources:
             Value: !Ref IdentityBrokerMailDomain
           - Name: MRM_IDENTITY_BROKER_REDIRECT_URI
             Value: !Ref IdentityBrokerRedirectUri
+          - Name: MRM_CONNECT_PORTAL
+            Value: !Ref ConnectPortal
+          - Name: MRM_CONNECT_PORTAL_HOSTNAME
+            Value: !Ref ConnectPortalHostname
+          - Name: MRM_CONNECT_PORTAL_CERTIFICATE_ARN
+            Value: !Ref ConnectPortalCertificateArn
           - Name: MRM_HOSTNAME_PREFIX
             Value: !Ref HostnamePrefix
           - Name: MRM_HOSTNAME_DIGITS
@@ -923,6 +967,9 @@ Resources:
                         IdentityBrokerImage: process.env.MRM_IDENTITY_BROKER_IMAGE || '',
                         IdentityBrokerMailDomain: process.env.MRM_IDENTITY_BROKER_MAIL_DOMAIN || '',
                         IdentityBrokerRedirectUri: process.env.MRM_IDENTITY_BROKER_REDIRECT_URI || '',
+                        ConnectPortal: process.env.MRM_CONNECT_PORTAL || 'false',
+                        ConnectPortalHostname: process.env.MRM_CONNECT_PORTAL_HOSTNAME || '',
+                        ConnectPortalCertificateArn: process.env.MRM_CONNECT_PORTAL_CERTIFICATE_ARN || '',
                         HostnamePrefix: process.env.MRM_HOSTNAME_PREFIX || 'vdi-',
                         HostnameDigits: process.env.MRM_HOSTNAME_DIGITS || '4',
                         IdentityCenterSyncGroups: process.env.MRM_IDENTITY_CENTER_SYNC_GROUPS || '',
@@ -1004,6 +1051,9 @@ Resources:
                         MRM_IDENTITY_BROKER_IMAGE: 'IdentityBrokerImage',
                         MRM_IDENTITY_BROKER_MAIL_DOMAIN: 'IdentityBrokerMailDomain',
                         MRM_IDENTITY_BROKER_REDIRECT_URI: 'IdentityBrokerRedirectUri',
+                        MRM_CONNECT_PORTAL: 'ConnectPortal',
+                        MRM_CONNECT_PORTAL_HOSTNAME: 'ConnectPortalHostname',
+                        MRM_CONNECT_PORTAL_CERTIFICATE_ARN: 'ConnectPortalCertificateArn',
                         MRM_HOSTNAME_PREFIX: 'HostnamePrefix',
                         MRM_HOSTNAME_DIGITS: 'HostnameDigits',
                         MRM_IDENTITY_CENTER_SYNC_GROUPS: 'IdentityCenterSyncGroups',
