@@ -296,7 +296,10 @@ describe('the DCV session name', () => {
   });
 
   test('is always present, because create-session refuses a request without one', async () => {
-    for (const claims of [{}, { firstName: '' }, { lastName: '' }, { firstName: '', lastName: '', email: '' }]) {
+    const variants: Record<string, string>[] = [
+      {}, { firstName: '' }, { lastName: '' }, { firstName: '', lastName: '', email: '' },
+    ];
+    for (const claims of variants) {
       expect((await nameSentFor(claims)).length).toBeGreaterThan(0);
     }
   });
