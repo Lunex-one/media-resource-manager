@@ -1116,10 +1116,16 @@ export class ApiStack extends cdk.Stack {
     // actions are for. Without them this handler can only honour a workstation
     // assigned to a person by name, and a group-assigned one is refused to
     // everybody who is not an administrator.
+    //
+    // The Directory Service Data API also checks ds:AccessDSData on the directory. This role
+    // lacked it, so every membership read was denied, ownership.py skipped the group by design,
+    // and a non-administrator was refused a workstation assigned to their group. Administrators
+    // never reach that rule, which is why the console did not show it.
     dcvSessionManagerFunction.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: [
         'ds:DescribeDirectories',
+        'ds:AccessDSData',
         'ds-data:ListGroupMembers',
       ],
       resources: ['*'],
