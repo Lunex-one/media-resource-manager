@@ -2,13 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The connect portal page. Every piece of text from the server goes in through textContent or a
-// text node, never innerHTML, and nothing here needs inline script.
+// text node, never innerHTML, and nothing here needs inline script. The state rules live in
+// state.js, which loads first and sets globalThis.PortalState.
 
 const app = document.getElementById('app');
+const State = globalThis.PortalState;
 const INSTANCE_ID = /^i-[0-9a-f]{8,17}$/;
 const POLL_MS = 5000;
 const MAX_POLLS = 90; // about seven and a half minutes
-const REFRESH_MS = 15000;
+const CONNECT_RETRIES = 12;
+const FAST_REFRESH_MS = 5000;
+const IDLE_REFRESH_MS = 15000;
 
 class SessionExpired extends Error {}
 
@@ -26,6 +30,12 @@ function el(tag, attrs, ...children) {
     node.append(child instanceof Node ? child : document.createTextNode(String(child)));
   }
   return node;
+}
+
+let refreshTimer = null;
+function stopRefresh() {
+  clearTimeout(refreshTimer);
+  refreshTimer = null;
 }
 
 function show(...nodes) {
@@ -73,46 +83,165 @@ async function loadWorkstations() {
   return result.data.workstations || [];
 }
 
-function stateOf(workstation) {
-  switch (workstation.instanceStatus) {
-    case 'running': return { label: 'Running', kind: 'ok', action: 'Connect' };
-    case 'stopped': return { label: 'Stopped', kind: 'idle', action: 'Start and connect' };
-    case 'pending': return { label: 'Starting', kind: 'busy', action: 'Connect when ready' };
-    case 'stopping': return { label: 'Stopping', kind: 'busy', action: 'Start and connect' };
-    default: return { label: workstation.instanceStatus || 'Unknown', kind: 'busy', action: 'Connect when ready' };
-  }
+// ---------------------------------------------------------------- per-workstation notes
+// Progress text and a fallback link for each workstation, kept across redraws of the list.
+
+const notes = new Map();
+const activeFlows = new Set();
+
+function linkTo(href, label, blank) {
+  return /^(https|dcv):/.test(href) ? { href, label, blank: !!blank } : null;
 }
 
-// Start the machine if it is stopped, wait until it is running and the desktop agent has
-// registered, then go into the desktop. `report` shows progress.
-async function connectWhenReady(instanceId, report) {
-  const first = (await loadWorkstations()).find((w) => w.instanceId === instanceId);
-  if (!first) throw new Error('This workstation is not assigned to you.');
-  if (first.instanceStatus === 'stopped' || first.instanceStatus === 'stopping') {
-    report('Starting your workstation…');
-    const started = await authed('POST', '/workstations/start', { instanceId });
-    if (!started.ok) throw new Error(started.data.error || 'The workstation could not be started.');
+function renderNote(instanceId) {
+  const target = document.querySelector(`[data-note="${instanceId}"]`);
+  if (!target) return;
+  const note = notes.get(instanceId) || {};
+  const parts = [];
+  if (note.text) parts.push(document.createTextNode(note.text));
+  if (note.link) {
+    parts.push(document.createTextNode(' '));
+    parts.push(el('a', {
+      href: note.link.href,
+      target: note.link.blank ? '_blank' : null,
+      rel: 'noopener noreferrer',
+    }, note.link.label));
   }
+  target.replaceChildren(...parts);
+}
+
+function setNote(instanceId, patch) {
+  notes.set(instanceId, { ...(notes.get(instanceId) || {}), ...patch });
+  renderNote(instanceId);
+}
+
+// ---------------------------------------------------------------- the workflows
+
+// Start the machine if it is stopped, then wait until it is truly ready: the instance running and
+// its DCV agent registered. The progress shown is MRM's own step name.
+async function waitUntilReady(instanceId, report) {
+  let started = false;
   for (let attempt = 0; attempt < MAX_POLLS; attempt += 1) {
-    const current = (await loadWorkstations()).find((w) => w.instanceId === instanceId);
-    if (current && current.instanceStatus === 'running') {
-      const result = await authed('POST', '/workstations/connect', { instanceId });
-      if (result.ok && result.data.connectionUrl) {
-        report('Opening your desktop…');
-        window.location.assign(result.data.connectionUrl);
-        return;
+    const workstation = (await loadWorkstations()).find((w) => w.instanceId === instanceId);
+    if (!workstation) throw new Error('This workstation is not assigned to you.');
+    const state = State.describe(workstation);
+    if (state.ready) return workstation;
+    if (state.failed) throw new Error('The workstation failed to start. Contact an administrator.');
+    if (state.canStart) {
+      if (!started) {
+        report('Starting your workstation…');
+        const result = await authed('POST', '/workstations/start', { instanceId });
+        if (!result.ok) throw new Error(result.data.error || 'The workstation could not be started.');
+        started = true;
       }
-      if (result.status !== 503) throw new Error(result.data.error || 'Could not connect.');
-      report('Almost ready…');
-    } else {
       report('Starting your workstation…');
+    } else {
+      report(`${state.label}…`);
     }
     await sleep(POLL_MS);
   }
   throw new Error('The workstation is taking longer than expected. Try again in a few minutes.');
 }
 
+// Mint a connection and open it: in the window the click opened for the browser, or through the
+// dcv:// link the native client registers.
+async function openDesktop(instanceId, mode, win) {
+  const report = (text) => setNote(instanceId, { text, link: null });
+  await waitUntilReady(instanceId, report);
+  report('Opening your desktop…');
+  let result = null;
+  for (let attempt = 0; attempt < CONNECT_RETRIES; attempt += 1) {
+    result = await authed('POST', '/workstations/connect', { instanceId });
+    if (result.ok && result.data.connectionUrl) break;
+    if (result.status !== 503) throw new Error(result.data.error || 'Could not connect.');
+    report('Almost ready…');
+    await sleep(POLL_MS);
+  }
+  if (!result || !result.ok || !result.data.connectionUrl) {
+    throw new Error('The desktop is not responding yet. Try again in a minute.');
+  }
+
+  if (mode === 'client') {
+    const dcvUrl = State.toDcvUrl(result.data.quicConnectionUrl || result.data.connectionUrl);
+    setNote(instanceId, {
+      text: 'Opening your DCV client…',
+      link: linkTo(dcvUrl, 'If it did not open, click here'),
+    });
+    window.location.assign(dcvUrl);
+    return;
+  }
+  const url = result.data.connectionUrl;
+  if (win && !win.closed) {
+    win.location.href = url;
+    setNote(instanceId, { text: 'Your desktop opened in a new window.', link: null });
+  } else {
+    setNote(instanceId, {
+      text: 'Your browser blocked the new window.',
+      link: linkTo(url, 'Open your desktop', true),
+    });
+  }
+}
+
+// A browser blocks a window opened after a delay, so the window is opened at the click and sent to
+// the desktop when it is ready.
+function openBlankWindow() {
+  const win = window.open('about:blank', '_blank');
+  if (win) {
+    try {
+      win.opener = null;
+      win.document.title = 'Connecting…';
+      win.document.body.textContent = 'Preparing your workstation…';
+    } catch (err) {
+      // a window we cannot write to is still a window we can navigate
+    }
+  }
+  return win;
+}
+
+async function runFlow(instanceId, mode, redraw) {
+  if (activeFlows.has(instanceId)) return;
+  const win = mode === 'browser' ? openBlankWindow() : null;
+  activeFlows.add(instanceId);
+  redraw();
+  setNote(instanceId, { text: 'Preparing…', link: null });
+  try {
+    await openDesktop(instanceId, mode, win);
+  } catch (err) {
+    if (win && !win.closed) win.close();
+    if (err instanceof SessionExpired) {
+      activeFlows.delete(instanceId);
+      loginView('Your session has expired. Sign in again.');
+      return;
+    }
+    setNote(instanceId, { text: err.message, link: null });
+  }
+  activeFlows.delete(instanceId);
+  redraw();
+}
+
+async function startOnly(instanceId, redraw) {
+  if (activeFlows.has(instanceId)) return;
+  activeFlows.add(instanceId);
+  setNote(instanceId, { text: 'Starting your workstation…', link: null });
+  try {
+    const result = await authed('POST', '/workstations/start', { instanceId });
+    if (!result.ok) throw new Error(result.data.error || 'The workstation could not be started.');
+  } catch (err) {
+    if (err instanceof SessionExpired) {
+      activeFlows.delete(instanceId);
+      loginView('Your session has expired. Sign in again.');
+      return;
+    }
+    setNote(instanceId, { text: err.message, link: null });
+  }
+  activeFlows.delete(instanceId);
+  redraw();
+}
+
+// ---------------------------------------------------------------- views
+
 function loginView(message) {
+  stopRefresh();
   const username = el('input', { id: 'username', name: 'username', type: 'text', autocomplete: 'username', required: true, autofocus: true });
   const password = el('input', { id: 'password', name: 'password', type: 'password', autocomplete: 'current-password', required: true });
   const error = el('p', { class: 'error', role: 'alert' }, message || '');
@@ -150,30 +279,38 @@ function header(user) {
     el('button', {
       type: 'button',
       onclick: async () => {
+        stopRefresh();
         await api('POST', '/logout');
         loginView('');
       },
     }, 'Sign out'));
 }
 
-function workstationCard(workstation, controls) {
-  const state = stateOf(workstation);
-  const progress = el('div', { class: 'progress', role: 'status' });
-  const button = el('button', { type: 'button', class: 'primary' }, state.action);
-  button.addEventListener('click', async () => {
-    controls.lock(true);
-    try {
-      await connectWhenReady(workstation.instanceId, (text) => { progress.textContent = text; });
-    } catch (err) {
-      if (err instanceof SessionExpired) {
-        loginView('Your session has expired. Sign in again.');
-        return;
-      }
-      progress.textContent = err.message;
-      controls.lock(false);
-    }
-  });
-  const link = `${window.location.origin}/connect/${workstation.instanceId}`;
+function actionButton(label, onClick, primary, disabled) {
+  return el('button', {
+    type: 'button',
+    class: primary ? 'primary' : null,
+    disabled: !!disabled,
+    onclick: onClick,
+  }, label);
+}
+
+function workstationCard(workstation, redraw) {
+  const state = State.describe(workstation);
+  const flowing = activeFlows.has(workstation.instanceId);
+  const id = workstation.instanceId;
+  const buttons = [];
+  if (state.ready) {
+    buttons.push(actionButton('Open in browser', () => runFlow(id, 'browser', redraw), true, flowing));
+    buttons.push(actionButton('Open in DCV client', () => runFlow(id, 'client', redraw), false, flowing));
+  } else if (state.canStart) {
+    buttons.push(actionButton('Start', () => startOnly(id, redraw), true, flowing));
+  } else if (state.failed) {
+    buttons.push(actionButton('Unavailable', () => {}, false, true));
+  } else {
+    buttons.push(actionButton(`${state.label}…`, () => {}, false, true));
+  }
+  const link = `${window.location.origin}/connect/${id}`;
   const linkBox = el('input', { type: 'text', readonly: true, value: link, 'aria-label': `Link for ${workstation.name}` });
   const copy = el('button', {
     type: 'button',
@@ -187,60 +324,74 @@ function workstationCard(workstation, controls) {
       }
     },
   }, 'Copy link');
-  controls.buttons.push(button);
   return el('section', { class: 'card' },
     el('div', { class: 'row' },
       el('h2', {}, workstation.name),
       el('span', { class: `badge ${state.kind}` }, state.label)),
     el('div', { class: 'muted' }, [workstation.platform, workstation.region].filter(Boolean).join(' · ')),
-    el('div', { class: 'actions' }, button),
-    progress,
+    el('div', { class: 'actions' }, ...buttons),
+    el('div', { class: 'progress', role: 'status', 'data-note': id }),
     el('div', { class: 'link' }, linkBox, copy));
 }
 
 async function dashboardView(user) {
-  let busy = false;
-  const controls = {
-    buttons: [],
-    lock(value) {
-      busy = value;
-      controls.buttons.forEach((button) => { button.disabled = value; });
-    },
-  };
-  async function draw() {
-    const workstations = await loadWorkstations();
-    controls.buttons = [];
-    const cards = workstations.length
-      ? workstations.map((w) => workstationCard(w, controls))
-      : [el('p', { class: 'muted' }, 'No workstations are assigned to you yet.')];
-    show(header(user), el('h1', {}, 'Your workstations'), ...cards);
+  stopRefresh();
+  let latest = [];
+  function redraw() {
+    show(header(user), el('h1', {}, 'Your workstations'),
+      ...(latest.length
+        ? latest.map((w) => workstationCard(w, refreshNow))
+        : [el('p', { class: 'muted' }, 'No workstations are assigned to you yet.')]));
+    latest.forEach((w) => renderNote(w.instanceId));
   }
-  try {
-    await draw();
-  } catch (err) {
-    if (err instanceof SessionExpired) return loginView('Your session has expired. Sign in again.');
-    return show(header(user), el('p', { class: 'error' }, err.message));
-  }
-  const timer = setInterval(async () => {
-    if (busy || document.hidden) return;
+  async function tick() {
+    stopRefresh();
     try {
-      await draw();
+      latest = await loadWorkstations();
+      redraw();
+      const anyBusy = latest.some((w) => State.describe(w).busy) || activeFlows.size > 0;
+      refreshTimer = setTimeout(tick, anyBusy ? FAST_REFRESH_MS : IDLE_REFRESH_MS);
     } catch (err) {
-      clearInterval(timer);
-      if (err instanceof SessionExpired) loginView('Your session has expired. Sign in again.');
+      if (err instanceof SessionExpired) return loginView('Your session has expired. Sign in again.');
+      show(header(user), el('p', { class: 'error' }, err.message));
     }
-  }, REFRESH_MS);
+  }
+  function refreshNow() {
+    stopRefresh();
+    refreshTimer = setTimeout(tick, 0);
+  }
+  await tick();
 }
 
+// The stable /connect/<id> link: start the machine if needed, wait, then offer both ways in. It never
+// navigates this window away on its own.
 async function connectView(user, instanceId) {
-  const status = el('p', { class: 'progress', role: 'status' }, 'Preparing your workstation…');
-  show(header(user), el('h1', {}, 'Connecting to your workstation'), status);
+  stopRefresh();
+  const actions = el('div', { class: 'actions' });
+  show(header(user), el('h1', {}, 'Your workstation'),
+    el('div', { class: 'progress', role: 'status', 'data-note': instanceId }),
+    actions,
+    el('p', {}, el('a', { href: '/' }, 'Back to my workstations')));
+  setNote(instanceId, { text: 'Preparing your workstation…', link: null });
   try {
-    await connectWhenReady(instanceId, (text) => { status.textContent = text; });
+    const workstation = await waitUntilReady(instanceId, (text) => setNote(instanceId, { text, link: null }));
+    setNote(instanceId, { text: `${workstation.name} is ready.`, link: null });
+    const open = (mode) => async () => {
+      const win = mode === 'browser' ? openBlankWindow() : null;
+      try {
+        await openDesktop(instanceId, mode, win);
+      } catch (err) {
+        if (win && !win.closed) win.close();
+        if (err instanceof SessionExpired) return loginView('Your session has expired. Sign in again.');
+        setNote(instanceId, { text: err.message, link: null });
+      }
+    };
+    actions.replaceChildren(
+      actionButton('Open in browser', open('browser'), true),
+      actionButton('Open in DCV client', open('client'), false));
   } catch (err) {
     if (err instanceof SessionExpired) return loginView('Your session has expired. Sign in again.');
-    show(header(user), el('h1', {}, 'Could not connect'), el('p', { class: 'error' }, err.message),
-      el('p', {}, el('a', { href: '/' }, 'Back to my workstations')));
+    setNote(instanceId, { text: err.message, link: null });
   }
 }
 
