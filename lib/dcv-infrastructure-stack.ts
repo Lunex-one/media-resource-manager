@@ -796,6 +796,17 @@ ${connectionGatewayInstallScript}`;
                 `arn:aws:ssm:${this.region}:${this.account}:parameter/${props.pascalCaseName}/Workstation/*`,
               ],
             }),
+            // The broker's API client credentials open a session on any workstation. The DCV/* grant
+            // above covers them, and a SecureString under the default aws/ssm key is readable by
+            // whoever may read the parameter, which includes every user on the workstation. Only the
+            // control-plane Lambdas read them; an explicit deny wins over the allow above.
+            new iam.PolicyStatement({
+              effect: iam.Effect.DENY,
+              actions: ['ssm:GetParameter', 'ssm:GetParameters'],
+              resources: [
+                `arn:aws:ssm:${this.region}:${this.account}:parameter/${props.pascalCaseName}/DCV/SessionManager/Client*`,
+              ],
+            }),
           ],
         }),
         DirectoryServiceAccess: new iam.PolicyDocument({
