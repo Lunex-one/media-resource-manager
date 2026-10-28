@@ -809,6 +809,16 @@ function generateCloudFormationTemplate(config) {
                     Effect: 'Allow',
                     Action: ['ssm:GetParameter', 'ssm:GetParameters'],
                     Resource: { 'Fn::Sub': `arn:aws:ssm:${primaryRegion}:\${AWS::AccountId}:parameter/\${ProductName}/*` }
+                  },
+                  {
+                    // The broker's API client credentials open a session on any workstation; only the
+                    // control-plane Lambdas may read them, not a user on the instance
+                    Effect: 'Deny',
+                    Action: ['ssm:GetParameter', 'ssm:GetParameters'],
+                    Resource: [
+                      { 'Fn::Sub': 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProductName}/DCV/SessionManager/Client*' },
+                      { 'Fn::Sub': `arn:aws:ssm:${primaryRegion}:\${AWS::AccountId}:parameter/\${ProductName}/DCV/SessionManager/Client*` }
+                    ]
                   }
                 ]
               }
