@@ -15,8 +15,29 @@ function getSSMClient(region) {
     return new SSMClient();
 }
 
+// One DNS label (RFC 1123): letters, digits and hyphens, not starting or ending with a hyphen.
+const HOSTNAME_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
+
+/**
+ * The hostname, refused unless it is one DNS label.
+ *
+ * It is pasted into the script below, which runs as root or SYSTEM, so anything else - a quote, a
+ * `$(...)`, a newline - would be script rather than a name. It is built from the deployment's
+ * HostnamePrefix and a counter, so a refusal means that prefix is wrong, or that the name was
+ * never generated: before this check a missing one was set as the hostname "null".
+ */
+function checkedHostname(hostname) {
+    if (typeof hostname !== 'string' || !HOSTNAME_LABEL.test(hostname)) {
+        throw new Error(`Refusing to set hostname ${JSON.stringify(hostname)}: a hostname is one DNS label of letters, digits and hyphens`);
+    }
+    return hostname;
+}
+
+exports.checkedHostname = checkedHostname;
+
 exports.handler = async (event) => {
-    const { instanceId, hostname, region } = event;
+    const { instanceId, region } = event;
+    const hostname = checkedHostname(event.hostname);
     console.log(`Setting Windows hostname to ${hostname} on instance ${instanceId} (region: ${region || 'primary'})`);
 
     const ssm = getSSMClient(region);

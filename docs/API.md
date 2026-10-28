@@ -608,6 +608,15 @@ changes the record and not those tags.
 
 The mount routes take `action` of `mount` or `unmount`.
 
+A mount route builds a script from the storage record and runs it on the workstation as root or
+SYSTEM. Every value from the record — its name, bucket, prefix, mount path and cache path — is
+written into that script as a quoted literal, so quotes, `$` and backticks in a name are kept as
+typed and never run. A value no script line can carry, one holding a control character such as a
+newline, or one that is missing, is refused with
+`400 {"success": false, "error": "<field> contains a control character"}` (or `"… is missing"`),
+and nothing is sent to the workstation. The FSx SMB logon script, which no route builds directly,
+refuses the same values and leaves the workstation's existing script in place.
+
 ### DataSync
 
 Present only when the DataSync stack is deployed (`lib/api-stack.ts:1449-1494`). Full TypeScript
