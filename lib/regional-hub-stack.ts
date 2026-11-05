@@ -13,6 +13,7 @@ import * as path from 'path';
 import { Construct } from 'constructs';
 
 interface RegionalHubStackProps extends cdk.StackProps {
+  workstationBucketAllowList?: string;  // comma-separated S3 bucket names workstations may mount
   regionalHubsTable: dynamodb.Table;
   amiTable: dynamodb.Table;
   workstationTable: dynamodb.Table;
@@ -98,6 +99,7 @@ export class RegionalHubStack extends cdk.Stack {
         TEMPLATE_BUCKET_NAME: templateBucket.bucketName,
         PRIMARY_REGION: this.region,
         WORKSTATION_TABLE_NAME: props.workstationTable.tableName,
+        WORKSTATION_S3_BUCKETS: JSON.stringify((props.workstationBucketAllowList ?? '').split(',').filter(Boolean)),
         ...(props.dataEncryptionKey && { DYNAMODB_KMS_KEY_ARN: props.dataEncryptionKey.keyArn }),
         ...lambdaAssetEnvVars,
       },

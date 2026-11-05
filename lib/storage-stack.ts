@@ -14,6 +14,7 @@ import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 
 interface StorageStackProps extends cdk.StackProps {
+  workstationBucketAllowList?: string;  // comma-separated S3 bucket names workstations may mount
   storageTable: dynamodb.Table;
   workstationTable: dynamodb.Table;
   regionalHubsTable: dynamodb.Table;
@@ -642,6 +643,7 @@ export class StorageStack extends cdk.Stack {
       environment: {
         STORAGE_TABLE_NAME: props.storageTable.tableName,
         WORKSTATION_TABLE_NAME: props.workstationTable.tableName,
+        WORKSTATION_BUCKET_ALLOWLIST: props.workstationBucketAllowList ?? '',
       },
     });
 

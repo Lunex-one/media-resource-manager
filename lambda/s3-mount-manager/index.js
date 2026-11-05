@@ -14,6 +14,7 @@ const { SSMClient, SendCommandCommand, GetCommandInvocationCommand } = require('
 const { EC2Client, DescribeInstancesCommand } = require('@aws-sdk/client-ec2');
 const { S3Client, GetBucketLocationCommand } = require('@aws-sdk/client-s3');
 const { requireAdmin } = require('./authz');
+const { assertBucketAllowed } = require('./bucket-allow-list');
 const { UnsafeValueError } = require('./script-quote');
 const scripts = require('./scripts');
 
@@ -132,6 +133,8 @@ async function mountS3Storage(instanceId, storageId) {
     if (storage.type !== 'mountpoint-s3') {
         throw new Error(`Storage ${storageId} is not a Mountpoint for S3 type`);
     }
+
+    assertBucketAllowed(storage.bucketName, process.env.WORKSTATION_BUCKET_ALLOWLIST);
 
     // Get workstation to determine platform
     const workstation = await getWorkstationById(instanceId);
