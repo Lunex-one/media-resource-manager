@@ -25,6 +25,7 @@ import { ObservabilityStack } from '../lib/observability-stack';
 import { AgentCoreStack } from '../lib/agentcore-stack';
 import { IdentityBrokerStack } from '../lib/identity-broker-stack';
 import { ConnectPortalStack } from '../lib/connect-portal-stack';
+import { parseBucketAllowList } from '../lib/bucket-allow-list';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
@@ -270,8 +271,13 @@ if (identityBrokerEnabled) {
 const dcvCertificateContent = loadCertificateFile(getContextOrParameter('dcvCertificateFile'));
 const dcvPrivateKeyContent = loadCertificateFile(getContextOrParameter('dcvPrivateKeyFile'));
 
+// S3 buckets workstations may mount. Exact names only; empty means no S3 mounts. The same list
+// bounds the workstation role's S3 access, the regional hub role's, and the S3 mount manager.
+const workstationBucketAllowList = parseBucketAllowList(getContextOrParameter('workstationBucketAllowList')).join(',');
+
 const dcvStack = new DcvInfrastructureStack(app, `${naming.acronym}-Dcv-Infrastructure`, {
   env,
+  workstationBucketAllowList,
   productName: naming.displayName,
   pascalCaseName: naming.pascalCase,
   acronym: naming.acronym,
@@ -419,6 +425,7 @@ workstationStartStack.addDependency(dcvStack);
 // Storage stack for storage resource management
 const storageStack = new StorageStack(app, `${naming.acronym}-Storage`, {
   env,
+  workstationBucketAllowList,
   storageTable: infrastructureStack.database.storageTable,
   workstationTable: infrastructureStack.database.workstationTable,
   regionalHubsTable: infrastructureStack.database.regionalHubsTable,
@@ -440,6 +447,7 @@ storageStack.addDependency(dcvStack);
 // Regional Hub stack for multi-region deployment
 const regionalHubStack = new RegionalHubStack(app, `${naming.acronym}-Regional-Hub`, {
   env,
+  workstationBucketAllowList,
   regionalHubsTable: infrastructureStack.database.regionalHubsTable,
   amiTable: infrastructureStack.database.amiTable,
   workstationTable: infrastructureStack.database.workstationTable,

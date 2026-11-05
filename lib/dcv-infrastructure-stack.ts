@@ -29,6 +29,7 @@ export interface DcvInfrastructureStackProps extends cdk.StackProps {
   dcvCertificateContent?: string;  // PEM certificate content for Connection Gateway TLS
   dcvPrivateKeyContent?: string;   // PEM private key content for Connection Gateway TLS
   dataEncryptionKey?: kms.IKey;
+  workstationBucketAllowList?: string;  // comma-separated S3 bucket names workstations may mount
 }
 
 const windowsDcvInstallContent = require('../ssm-documents/windows-dcv-install');
@@ -777,6 +778,11 @@ ${connectionGatewayInstallScript}`;
       updateMethod: 'NewVersion',
     });
 
+    // The buckets the workstation role may reach for storage mounts (WorkstationBucketAllowList).
+    // Empty means none, and the policy is left out: a user on a workstation can use the role's
+    // credentials directly, so a wildcard here would reach every bucket in the account.
+    const workstationBuckets = (props.workstationBucketAllowList ?? '').split(',').filter(Boolean);
+
     // Workstation Instance Role
     const workstationInstanceRole = new iam.Role(this, 'WorkstationInstanceRole', {
       assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
@@ -836,27 +842,31 @@ ${connectionGatewayInstallScript}`;
             }),
           ],
         }),
-        // S3 access for Mountpoint S3 storage mounts
-        MountpointS3Access: new iam.PolicyDocument({
-          statements: [
-            new iam.PolicyStatement({
-              effect: iam.Effect.ALLOW,
-              actions: [
-                's3:ListBucket',
-              ],
-              resources: ['arn:aws:s3:::*'],
-            }),
-            new iam.PolicyStatement({
-              effect: iam.Effect.ALLOW,
-              actions: [
-                's3:GetObject',
-                's3:PutObject',
-                's3:DeleteObject',
-              ],
-              resources: ['arn:aws:s3:::*/*'],
-            }),
-          ],
-        }),
+        // S3 access for Mountpoint S3 storage mounts, limited to the allow-listed buckets
+        ...(workstationBuckets.length > 0
+          ? {
+              MountpointS3Access: new iam.PolicyDocument({
+                statements: [
+                  new iam.PolicyStatement({
+                    effect: iam.Effect.ALLOW,
+                    actions: [
+                      's3:ListBucket',
+                    ],
+                    resources: workstationBuckets.map((bucket) => `arn:aws:s3:::${bucket}`),
+                  }),
+                  new iam.PolicyStatement({
+                    effect: iam.Effect.ALLOW,
+                    actions: [
+                      's3:GetObject',
+                      's3:PutObject',
+                      's3:DeleteObject',
+                    ],
+                    resources: workstationBuckets.map((bucket) => `arn:aws:s3:::${bucket}/*`),
+                  }),
+                ],
+              }),
+            }
+          : {}),
       },
     });
 

@@ -64,6 +64,7 @@ Metadata:
           default: "Workstation Settings"
         Parameters:
           - HostnamePrefix
+          - WorkstationBucketAllowList
           - HostnameDigits
           - EnableBedrockFeatures
       - Label:
@@ -133,6 +134,8 @@ Metadata:
         default: "Connect Portal Hostname (optional)"
       ConnectPortalCertificateArn:
         default: "Connect Portal ACM Certificate ARN (us-east-1)"
+      WorkstationBucketAllowList:
+        default: "S3 Buckets Workstations May Mount"
       UseCognitoAuth:
         default: "Use Cognito / SAML Authentication"
       IdentityCenterSyncGroups:
@@ -378,6 +381,16 @@ Parameters:
     Description: >
       ARN of the ACM certificate for ConnectPortalHostname. It must be in us-east-1 because
       CloudFront only accepts certificates from there.
+
+  WorkstationBucketAllowList:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9](,[a-z0-9][a-z0-9.-]{1,61}[a-z0-9])*$'
+    ConstraintDescription: Must be empty or comma-separated S3 bucket names with no spaces and no wildcards.
+    Description: >
+      Comma-separated names of the S3 buckets workstations may mount (exact names, no wildcards).
+      Any user on a workstation can use the workstation role's credentials, so this list is the
+      limit of what S3 content they can reach. Empty means workstations can mount no S3 buckets.
 
   HostnamePrefix:
     Type: String
@@ -782,6 +795,8 @@ Resources:
             Value: !Ref ConnectPortalHostname
           - Name: MRM_CONNECT_PORTAL_CERTIFICATE_ARN
             Value: !Ref ConnectPortalCertificateArn
+          - Name: MRM_WORKSTATION_BUCKET_ALLOWLIST
+            Value: !Ref WorkstationBucketAllowList
           - Name: MRM_HOSTNAME_PREFIX
             Value: !Ref HostnamePrefix
           - Name: MRM_HOSTNAME_DIGITS
@@ -970,6 +985,7 @@ Resources:
                         ConnectPortal: process.env.MRM_CONNECT_PORTAL || 'false',
                         ConnectPortalHostname: process.env.MRM_CONNECT_PORTAL_HOSTNAME || '',
                         ConnectPortalCertificateArn: process.env.MRM_CONNECT_PORTAL_CERTIFICATE_ARN || '',
+                        WorkstationBucketAllowList: process.env.MRM_WORKSTATION_BUCKET_ALLOWLIST || '',
                         HostnamePrefix: process.env.MRM_HOSTNAME_PREFIX || 'vdi-',
                         HostnameDigits: process.env.MRM_HOSTNAME_DIGITS || '4',
                         IdentityCenterSyncGroups: process.env.MRM_IDENTITY_CENTER_SYNC_GROUPS || '',
@@ -1054,6 +1070,7 @@ Resources:
                         MRM_CONNECT_PORTAL: 'ConnectPortal',
                         MRM_CONNECT_PORTAL_HOSTNAME: 'ConnectPortalHostname',
                         MRM_CONNECT_PORTAL_CERTIFICATE_ARN: 'ConnectPortalCertificateArn',
+                        MRM_WORKSTATION_BUCKET_ALLOWLIST: 'WorkstationBucketAllowList',
                         MRM_HOSTNAME_PREFIX: 'HostnamePrefix',
                         MRM_HOSTNAME_DIGITS: 'HostnameDigits',
                         MRM_IDENTITY_CENTER_SYNC_GROUPS: 'IdentityCenterSyncGroups',

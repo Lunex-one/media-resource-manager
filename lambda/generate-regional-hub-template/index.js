@@ -846,26 +846,30 @@ function generateCloudFormationTemplate(config) {
                 }]
               }
             },
-            {
-              // Mountpoint for S3 (Linux) and rclone (Windows) mounting - matches the
-              // primary-region WorkstationInstanceRole's MountpointS3Access policy
-              PolicyName: 'MountpointS3Access',
-              PolicyDocument: {
-                Version: '2012-10-17',
-                Statement: [
-                  {
-                    Effect: 'Allow',
-                    Action: ['s3:ListBucket'],
-                    Resource: 'arn:aws:s3:::*'
-                  },
-                  {
-                    Effect: 'Allow',
-                    Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
-                    Resource: 'arn:aws:s3:::*/*'
-                  }
-                ]
-              }
-            }
+            // Mountpoint for S3 (Linux) and rclone (Windows) mounting - limited to the same
+            // allow-listed buckets as the primary-region WorkstationInstanceRole; no list, no policy
+            ...(() => {
+              const buckets = JSON.parse(process.env.WORKSTATION_S3_BUCKETS || '[]');
+              if (buckets.length === 0) return [];
+              return [{
+                PolicyName: 'MountpointS3Access',
+                PolicyDocument: {
+                  Version: '2012-10-17',
+                  Statement: [
+                    {
+                      Effect: 'Allow',
+                      Action: ['s3:ListBucket'],
+                      Resource: buckets.map((bucket) => `arn:aws:s3:::${bucket}`)
+                    },
+                    {
+                      Effect: 'Allow',
+                      Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+                      Resource: buckets.map((bucket) => `arn:aws:s3:::${bucket}/*`)
+                    }
+                  ]
+                }
+              }];
+            })()
           ]
         }
       },
