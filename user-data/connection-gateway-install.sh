@@ -36,6 +36,17 @@ TMP_DIR="$(mktemp -d /tmp/dcv-install-XXXXXX)"
 
 echo "$(date -u) Detected OS: $system $version, arch: $arch" | tee -a "$LOG_PATH"
 
+# Install current security updates before anything else is installed. The AMI is only as current as
+# the day it was built and nothing else patches these instances. A failure here must not stop the install.
+if [ "$system" = "amzn" ] && [ "$version" = "2023" ]; then
+  echo "$(date -u) Installing current security updates..." | tee -a "$LOG_PATH"
+  if dnf upgrade --security --releasever=latest -y >> "$LOG_PATH" 2>&1; then
+    echo "$(date -u) Security updates installed" | tee -a "$LOG_PATH"
+  else
+    echo "$(date -u) WARNING: security update step failed; continuing with the installed packages" | tee -a "$LOG_PATH"
+  fi
+fi
+
 # Determine package type based on OS
 case $system in
     amzn)
