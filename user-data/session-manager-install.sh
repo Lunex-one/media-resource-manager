@@ -51,6 +51,17 @@ TMP_DIR="$(mktemp -d /tmp/dcv-install-XXXXXX)"
 
 log_message "Detected OS: $system $version (major: $major_version)"
 
+# Install current security updates before anything else is installed. The AMI is only as current as
+# the day it was built and nothing else patches these instances. A failure here must not stop the install.
+if [ "$system" = "amzn" ] && [ "$version" = "2023" ]; then
+  log_message "Installing current security updates..."
+  if dnf upgrade --security --releasever=latest -y >> "$LOG_PATH" 2>&1; then
+    log_message "Security updates installed"
+  else
+    log_message "WARNING: security update step failed; continuing with the installed packages"
+  fi
+fi
+
 # Determine package type based on OS
 case $system in
     amzn)
