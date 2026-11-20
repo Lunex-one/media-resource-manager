@@ -431,6 +431,7 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
       case 'fsx-ontap': return 'FSx for ONTAP';
       case 'mountpoint-s3': return 'Mountpoint for S3';
       case 'nexis': return 'Avid NEXIS';
+      case 'qumulo': return 'Qumulo';
       default: return type;
     }
   };
@@ -441,6 +442,7 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
       case 'fsx-ontap': return 'purple';
       case 'mountpoint-s3': return 'green';
       case 'nexis': return 'orange';
+      case 'qumulo': return 'cyan';
       default: return 'default';
     }
   };
@@ -583,6 +585,16 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
   ];
 
   const storageType = Form.useWatch('type', createForm);
+
+  // NEXIS and Qumulo share the configuration.instanceType field but not its values.
+  useEffect(() => {
+    const defaults: Record<string, string> = { nexis: 'c5.2xlarge', qumulo: 'm6i.xlarge' };
+    if (storageType && defaults[storageType]) {
+      createForm.setFieldsValue({
+        configuration: { ...createForm.getFieldValue('configuration'), instanceType: defaults[storageType] },
+      });
+    }
+  }, [storageType, createForm]);
   const teamSize = Form.useWatch(['configuration', 'teamSize'], createForm);
   const haPairs = Form.useWatch(['configuration', 'haPairs'], createForm) || 2;
   const isCrossAccountS3 = Form.useWatch(['configuration', 'isCrossAccount'], createForm);
@@ -742,6 +754,7 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
               { label: 'FSx for ONTAP', value: 'fsx-ontap' },
               { label: 'Mountpoint for S3', value: 'mountpoint-s3' },
               { label: 'Avid NEXIS', value: 'nexis' },
+              { label: 'Qumulo', value: 'qumulo' },
             ]}
           />
           <Select
@@ -819,6 +832,7 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
                   { label: 'FSx for Windows File System', value: 'fsx-windows' },
                   { label: 'Mountpoint for Amazon S3', value: 'mountpoint-s3' },
                   { label: 'Avid NEXIS', value: 'nexis' },
+                  { label: 'Qumulo', value: 'qumulo' },
                 ]}
               />
             </Form.Item>
@@ -1054,6 +1068,56 @@ const FilesystemsAntd: React.FC<FilesystemsAntdProps> = ({
                     { label: 'c5.4xlarge', value: 'c5.4xlarge' },
                     { label: 'c6i.2xlarge', value: 'c6i.2xlarge' },
                     { label: 'c6i.4xlarge', value: 'c6i.4xlarge' },
+                  ]} />
+                </Form.Item>
+              </>
+            )}
+
+            {/* Cloud Native Qumulo fields */}
+            {storageType === 'qumulo' && (
+              <>
+                <Alert
+                  type="info"
+                  message="Cloud Native Qumulo"
+                  description="Deploys a Qumulo file system cluster (SMB and NFS) from Qumulo's own templates. Creation can take tens of minutes. Instance type, node count and capacity limit cannot be changed after creation. Mounting on workstations isn't available in MRM yet: join the cluster to Active Directory and create shares from its web interface."
+                  style={{ marginBottom: 16 }}
+                />
+                <Form.Item name={['configuration', 'instanceType']} label="Node Instance Type">
+                  <Select options={[
+                    { label: 'm6i.xlarge (testing)', value: 'm6i.xlarge' },
+                    { label: 'i4i.2xlarge', value: 'i4i.2xlarge' },
+                    { label: 'i4i.4xlarge', value: 'i4i.4xlarge' },
+                  ]} />
+                </Form.Item>
+                <Form.Item
+                  name={['configuration', 'nodeCount']}
+                  label="Nodes"
+                  initialValue={1}
+                  extra="1 node for testing, or 3 to 24 for a resilient cluster."
+                  rules={[{
+                    validator: (_: unknown, value: number) =>
+                      value === 1 || (Number.isInteger(value) && value >= 3 && value <= 24)
+                        ? Promise.resolve()
+                        : Promise.reject(new Error('Use 1 node, or 3 to 24')),
+                  }]}
+                >
+                  <InputNumber min={1} max={24} precision={0} style={{ width: '100%' }} />
+                </Form.Item>
+                <Form.Item
+                  name={['configuration', 'softCapacityTB']}
+                  label="Capacity Limit (TB)"
+                  initialValue={50}
+                  extra="The soft limit Qumulo enforces on stored data, from 50 to 50,000 TB."
+                  rules={[{ required: true, message: 'Enter a capacity limit' }]}
+                >
+                  <InputNumber min={50} max={50000} precision={0} style={{ width: '100%' }} />
+                </Form.Item>
+                <Form.Item name={['configuration', 'persistentStorageType']} label="S3 Storage Class" initialValue="hot_s3_std">
+                  <Select options={[
+                    { label: 'Hot - S3 Standard', value: 'hot_s3_std' },
+                    { label: 'Hot - S3 Intelligent-Tiering', value: 'hot_s3_int' },
+                    { label: 'Cold - S3 Standard-IA', value: 'cold_s3_ia' },
+                    { label: 'Cold - S3 Glacier Instant Retrieval', value: 'cold_s3_gir' },
                   ]} />
                 </Form.Item>
               </>

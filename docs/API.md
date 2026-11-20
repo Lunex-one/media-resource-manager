@@ -567,8 +567,8 @@ agent is disabled; `429` carries `{limitType, currentUsage, limit}`.
 
 ### Storage
 
-FSx for NetApp ONTAP, FSx for Windows File Server, Mountpoint-for-S3 volumes, and Avid NEXIS
-System Director.
+FSx for NetApp ONTAP, FSx for Windows File Server, Mountpoint-for-S3 volumes, Avid NEXIS
+System Director, and Cloud Native Qumulo clusters.
 
 | Method | Path | Body | Notes |
 |---|---|---|---|
@@ -595,7 +595,7 @@ System Director.
 }
 ```
 
-`type` is one of `fsx-windows` (the default), `fsx-ontap`, `mountpoint-s3`, `nexis`;
+`type` is one of `fsx-windows` (the default), `fsx-ontap`, `mountpoint-s3`, `nexis`, `qumulo`;
 `configuration` is type-specific. `name` and `configuration` are required — otherwise
 `400 {"success": false, "error": "Name and configuration are required"}`. Provisioning runs as a
 nested CloudFormation stack driven by Step Functions, so a `201` means *accepted*: poll
@@ -605,6 +605,29 @@ The three references are optional and sit at the top level of the body, not insi
 `configuration`. They become CloudFormation stack tags, so they reach the real AWS resources — see
 [References](#references-constellationid-projectid-and-externalref), including why editing one later
 changes the record and not those tags.
+
+**Qumulo** (`type: qumulo`) deploys Cloud Native Qumulo from Qumulo's own CloudFormation templates,
+as two stacks: the persistent S3 buckets, then the cluster. It is available in the primary region
+only. `configuration` takes:
+
+| Field | Values | Default |
+|---|---|---|
+| `instanceType` | `m6i.xlarge`, `i4i.2xlarge`, `i4i.4xlarge` | `m6i.xlarge` |
+| `nodeCount` | `1`, or `3` to `24` | `1` |
+| `softCapacityTB` | `50` to `50000` | `50` |
+| `persistentStorageType` | `hot_s3_std`, `hot_s3_int`, `cold_s3_ia`, `cold_s3_gir` | `hot_s3_std` |
+
+A bad value is `400` with the reason. So is creating Qumulo storage before an operator has staged
+Qumulo's templates and software with `scripts/stage-qumulo.sh`. Creation takes tens of minutes.
+The record carries `clusterName` from the start and, once `available`, `qumuloUrl` (the cluster's
+web UI) and `qumuloPrivateIp`. The cluster's `admin` password is in Secrets Manager at
+`/<product>/Storage/<storageId>/QumuloAdminPassword`.
+
+Qumulo's size settings cannot be changed after creation: instance type, node count and zone layout
+need a replacement cluster, which MRM does not automate yet. `DELETE` is destructive. It turns off
+Qumulo's termination and bucket protection, deletes the cluster stack and then the storage stack,
+and the data in the buckets goes with them. No mount route supports Qumulo yet, and Active
+Directory join and shares are set up on the cluster itself.
 
 The mount routes take `action` of `mount` or `unmount`.
 
