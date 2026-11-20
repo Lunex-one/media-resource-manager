@@ -180,3 +180,5 @@ describe('the create-storage copy of params.js', () => {
     expect(read('lambda/create-storage/qumulo-params.js')).toBe(read('lambda/qumulo-cfn-worker/params.js'));
   });
 });
+
+export {};
