@@ -370,6 +370,24 @@ exports.handler = async (event) => {
       }
     }
     
+    // Qumulo is two stacks. The cluster stack may be gone (or never made) while the storage stack
+    // that holds the S3 buckets still exists, and deleting only the record would orphan the buckets.
+    let qumuloStorageStackExists = false;
+    if (storage.type === 'qumulo') {
+      const qumuloStorageStackName = storage.qumuloStorageStackName || (stackName ? `${stackName}-Data` : null);
+      if (qumuloStorageStackName) {
+        try {
+          const described = await cfn.send(new DescribeStacksCommand({ StackName: qumuloStorageStackName }));
+          const qumuloStorageStatus = described.Stacks?.[0]?.StackStatus;
+          qumuloStorageStackExists = Boolean(qumuloStorageStatus) && qumuloStorageStatus !== 'DELETE_COMPLETE';
+        } catch (error) {
+          if (!(error.message || '').includes('does not exist')) {
+            throw error;
+          }
+        }
+      }
+    }
+
     // Handle cases where we can delete the record directly, because no stack is left:
     // 1. No stack name (creation never got that far)
     // 2. Stack doesn't exist (already deleted or never created)
@@ -382,7 +400,7 @@ exports.handler = async (event) => {
     // otherwise it leaves the record delete-failed with the error.
     const directDeleteStatuses = ['DELETE_COMPLETE'];
     
-    if (!stackName || !stackExists || (stackStatus && directDeleteStatuses.includes(stackStatus))) {
+    if (!qumuloStorageStackExists && (!stackName || !stackExists || (stackStatus && directDeleteStatuses.includes(stackStatus)))) {
       console.log(`Direct delete: stackName=${stackName}, stackExists=${stackExists}, stackStatus=${stackStatus}`);
       
       // Delete the DynamoDB record directly
@@ -435,14 +453,24 @@ exports.handler = async (event) => {
     
     // storageRegion already defined above
     
+    const isQumulo = storage.type === 'qumulo';
     await sfn.send(new StartExecutionCommand({
-      stateMachineArn: process.env.STORAGE_DELETION_STATE_MACHINE_ARN,
+      stateMachineArn: isQumulo
+        ? process.env.QUMULO_DELETION_STATE_MACHINE_ARN
+        : process.env.STORAGE_DELETION_STATE_MACHINE_ARN,
       name: executionName,
-      input: JSON.stringify({
-        storageId,
-        cloudFormationStackName: stackName,
-        region: storageRegion
-      })
+      input: JSON.stringify(isQumulo
+        ? {
+            storageId,
+            computeStackName: stackName,
+            storageStackName: storage.qumuloStorageStackName || `${stackName}-Data`,
+            region: storageRegion
+          }
+        : {
+            storageId,
+            cloudFormationStackName: stackName,
+            region: storageRegion
+          })
     }));
     
     console.log(`Started deletion execution: ${executionName} for region: ${storageRegion}`);
