@@ -1061,7 +1061,8 @@
             "fsx-windows",
             "fsx-ontap",
             "mountpoint-s3",
-            "nexis"
+            "nexis",
+            "qumulo"
           ]
         },
         "status": {
@@ -1110,7 +1111,8 @@
             "fsx-windows",
             "fsx-ontap",
             "mountpoint-s3",
-            "nexis"
+            "nexis",
+            "qumulo"
           ],
           "default": "fsx-windows"
         },

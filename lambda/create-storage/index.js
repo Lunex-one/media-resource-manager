@@ -202,6 +202,8 @@ exports.handler = async (event) => {
       return await createFsxOntapStorage(storageId, data, configuration, createdAt, targetRegion);
     } else if (storageType === 'nexis') {
       return await createNexisStorage(storageId, data, configuration, createdAt, targetRegion);
+    } else if (storageType === 'qumulo') {
+      return await createQumuloStorage(storageId, data, configuration, createdAt, targetRegion);
     } else {
       return {
         statusCode: 400,
@@ -695,6 +697,115 @@ async function createNexisStorage(storageId, data, configuration, createdAt, tar
         instanceType,
         ...referenceAttributes(data),
         configuration,
+        createdAt
+      }
+    })
+  };
+}
+
+
+/**
+ * Create Cloud Native Qumulo storage.
+ * Primary region only for now. Qumulo is two CloudFormation stacks (persistent S3 buckets, then
+ * the cluster), so it runs its own Step Functions flow instead of the shared one. The cluster's
+ * admin password is made and kept by qumulo-cfn-worker, never passed through the state machine.
+ */
+async function createQumuloStorage(storageId, data, configuration, createdAt, targetRegion) {
+  // Same helper qumulo-cfn-worker uses; test/qumulo-params.test.ts keeps the two copies identical.
+  const qumuloParams = require('./qumulo-params.js');
+  const region = targetRegion || PRIMARY_REGION;
+  const reject = (error) => ({
+    statusCode: 400,
+    headers: corsHeaders,
+    body: JSON.stringify({ success: false, error })
+  });
+
+  if (region !== PRIMARY_REGION) {
+    return reject('Qumulo storage is only available in the primary region for now');
+  }
+
+  const checked = qumuloParams.validateConfiguration(configuration);
+  if (!checked.ok) {
+    return reject(checked.error);
+  }
+  const qumuloConfiguration = checked.value;
+
+  // Fail here, not minutes into a state machine, when nobody has staged Qumulo's templates yet.
+  const { SSMClient: QumuloSsmClient, GetParameterCommand: QumuloGetParameterCommand } = require('@aws-sdk/client-ssm');
+  try {
+    await new QumuloSsmClient({ region: process.env.AWS_REGION }).send(
+      new QumuloGetParameterCommand({ Name: process.env.QUMULO_CORE_VERSION_PARAMETER })
+    );
+  } catch (error) {
+    if (error.name === 'ParameterNotFound') {
+      return reject('Qumulo has not been set up in this deployment yet: an operator must stage its templates and software first (scripts/stage-qumulo.sh).');
+    }
+    throw error;
+  }
+
+  const { computeStackName, storageStackName } = qumuloParams.stackNames(process.env.QUMULO_ACRONYM, storageId);
+  const clusterName = qumuloParams.clusterName(data.name, storageId);
+
+  const item = {
+    storageId,
+    createdAt,
+    name: data.name,
+    type: 'qumulo',
+    description: data.description || '',
+    status: 'initializing',
+    platform: 'multi', // SMB and NFS
+    region,
+    instanceType: qumuloConfiguration.instanceType,
+    nodeCount: qumuloConfiguration.nodeCount,
+    clusterName,
+    // Recorded now, not when the first stack starts, so a delete can always find both stacks.
+    cloudFormationStackName: computeStackName,
+    qumuloStorageStackName: storageStackName,
+    ...referenceAttributes(data),
+    configuration: qumuloConfiguration
+  };
+
+  console.log('Creating Qumulo storage item:', item);
+
+  await dynamodb.send(new PutCommand({
+    TableName: process.env.STORAGE_TABLE_NAME,
+    Item: item
+  }));
+
+  const executionName = `qumulo-creation-${storageId}-${Date.now()}`;
+  console.log('Starting Qumulo Step Functions execution:', executionName);
+
+  await sfn.send(new StartExecutionCommand({
+    stateMachineArn: process.env.QUMULO_CREATION_STATE_MACHINE_ARN,
+    input: JSON.stringify({
+      storageId,
+      name: data.name,
+      region,
+      references: referenceValues(data),
+      configuration: qumuloConfiguration,
+      computeStackName,
+      storageStackName
+    }),
+    name: executionName
+  }));
+
+  return {
+    statusCode: 201,
+    headers: corsHeaders,
+    body: JSON.stringify({
+      success: true,
+      data: {
+        storageId,
+        name: data.name,
+        type: 'qumulo',
+        status: 'initializing',
+        platform: 'multi',
+        region,
+        instanceType: qumuloConfiguration.instanceType,
+        nodeCount: qumuloConfiguration.nodeCount,
+        clusterName,
+        ...referenceAttributes(data),
+        configuration: qumuloConfiguration,
         createdAt
       }
     })

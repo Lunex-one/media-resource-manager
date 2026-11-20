@@ -12,6 +12,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
+import { QumuloStorage } from './constructs/qumulo-storage';
 
 interface StorageStackProps extends cdk.StackProps {
   workstationBucketAllowList?: string;  // comma-separated S3 bucket names workstations may mount
@@ -268,6 +269,17 @@ export class StorageStack extends cdk.Stack {
       keyName: storageApplianceKeyName,
     });
     this.functions.generateFsxTemplate.addEnvironment('STORAGE_APPLIANCE_KEY_NAME', storageApplianceKeyName);
+
+    // Cloud Native Qumulo: its own assets bucket, permissions boundary, CloudFormation service
+    // role, worker Lambda and creation/deletion state machines (two stacks each, so it does not
+    // share the single-stack flow above).
+    const qumulo = new QumuloStorage(this, 'Qumulo', {
+      acronym: props.acronym,
+      pascalCaseName: props.pascalCaseName,
+      storageTable: props.storageTable,
+      dataEncryptionKey: props.dataEncryptionKey,
+      applianceKeyName: storageApplianceKeyName,
+    });
 
     // Storage CloudFormation Worker Function - handles cross-region CloudFormation operations
     this.functions.storageCfnWorker = new lambda.Function(this, 'StorageCfnWorkerFunction', {
@@ -1558,6 +1570,26 @@ export class StorageStack extends cdk.Stack {
 
     // Update DeleteStorageFunction environment to include Step Functions ARN
     this.functions.deleteStorage.addEnvironment('STORAGE_DELETION_STATE_MACHINE_ARN', this.deletionStateMachine.stateMachineArn);
+
+    // Cloud Native Qumulo wiring: which state machines the API functions start, and what they may read.
+    this.functions.createStorage.addEnvironment('QUMULO_CREATION_STATE_MACHINE_ARN', qumulo.creationStateMachine.stateMachineArn);
+    this.functions.createStorage.addEnvironment('QUMULO_ACRONYM', props.acronym);
+    this.functions.createStorage.addEnvironment('QUMULO_CORE_VERSION_PARAMETER', `/${props.pascalCaseName}/Qumulo/CoreVersion`);
+    this.functions.deleteStorage.addEnvironment('QUMULO_DELETION_STATE_MACHINE_ARN', qumulo.deletionStateMachine.stateMachineArn);
+    qumulo.creationStateMachine.grantStartExecution(this.functions.createStorage);
+    qumulo.deletionStateMachine.grantStartExecution(this.functions.deleteStorage);
+    // create-storage refuses early when nobody has staged Qumulo (the Core version parameter is missing).
+    this.functions.createStorage.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['ssm:GetParameter'],
+      resources: [`arn:${cdk.Aws.PARTITION}:ssm:${this.region}:${this.account}:parameter/${props.pascalCaseName}/Qumulo/CoreVersion`],
+    }));
+    // delete-storage checks whether Qumulo's second (storage) stack still exists before it removes a record.
+    this.functions.deleteStorage.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['cloudformation:DescribeStacks'],
+      resources: [`arn:${cdk.Aws.PARTITION}:cloudformation:${this.region}:${this.account}:stack/${props.acronym}-Qumulo-*/*`],
+    }));
 
     // Grant CreateStorageFunction permission to start Step Functions execution
     this.functions.createStorage.addToRolePolicy(new iam.PolicyStatement({

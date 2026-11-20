@@ -360,6 +360,30 @@ umount ${details.mountPath}`;
             </>
           )}
 
+          {details.type === 'qumulo' && (
+            <>
+              <Divider style={{ margin: 0 }} />
+              <div>
+                <Text strong style={{ fontSize: 14, display: 'block', marginBottom: 12 }}>Cloud Native Qumulo</Text>
+                <Descriptions column={{ xs: 1, sm: 2 }} size="small">
+                  {details.clusterName && <Descriptions.Item label="Cluster Name">{details.clusterName}</Descriptions.Item>}
+                  {details.qumuloUrl && details.qumuloUrl !== 'N/A' && <Descriptions.Item label="Web Interface">{details.qumuloUrl}</Descriptions.Item>}
+                  {details.qumuloPrivateIp && details.qumuloPrivateIp !== 'N/A' && <Descriptions.Item label="Private IP Address">{details.qumuloPrivateIp}</Descriptions.Item>}
+                  {details.instanceType && <Descriptions.Item label="Instance Type">{details.instanceType}</Descriptions.Item>}
+                  {details.nodeCount && <Descriptions.Item label="Nodes">{details.nodeCount}</Descriptions.Item>}
+                  {details.configuration?.softCapacityTB && <Descriptions.Item label="Capacity Limit">{`${details.configuration.softCapacityTB} TB`}</Descriptions.Item>}
+                  {details.configuration?.persistentStorageType && <Descriptions.Item label="S3 Storage Class">{details.configuration.persistentStorageType}</Descriptions.Item>}
+                </Descriptions>
+                <Text type="secondary" style={{ display: 'block', marginTop: 12, marginBottom: 4 }}>
+                  The web interface is reachable from inside the VPC, for example from a workstation. Retrieve the cluster admin password (run this in a terminal with AWS CLI access):
+                </Text>
+                <Paragraph copyable code style={{ marginBottom: 0 }}>
+                  {`aws secretsmanager get-secret-value --secret-id "/${(config?.productName || 'MediaResourceManager').replace(/[^a-zA-Z0-9]/g, '')}/Storage/${details.storageId}/QumuloAdminPassword" --query 'SecretString' --output text | grep -o '"password":"[^"]*"' | cut -d'"' -f4`}
+                </Paragraph>
+              </div>
+            </>
+          )}
+
           {details.type === 'fsx-ontap' && (details.svmId || details.volumeId) && (
             <>
               <Divider style={{ margin: 0 }} />

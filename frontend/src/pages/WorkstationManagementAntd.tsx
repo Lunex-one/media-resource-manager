@@ -1049,6 +1049,9 @@ const WorkstationManagementAntd: React.FC<WorkstationManagementAntdProps> = ({
 
         // Filter storage based on platform compatibility AND region
         const compatibleStorage = availableStorageList.filter((storage: any) => {
+          // Qumulo has no workstation mount yet, so it is not offered here; it is created and
+          // managed on the Filesystems page only.
+          if (storage.type === 'qumulo') return false;
           let platformCompatible = true;
           if (storage.type === 'mountpoint-s3') {
             platformCompatible = selectedPlatforms.has('linux') || selectedPlatforms.has('windows');
